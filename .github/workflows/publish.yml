@@ -1,0 +1,30 @@
+# This workflow will run tests using node and then publish a package to npm registry when a release is created
+# For more information see: https://docs.github.com/en/actions/publishing-packages/publishing-nodejs-packages
+
+name: Publish to npm registry
+
+on:
+  workflow_dispatch:
+  release:
+    types: [created]
+
+permissions:
+  id-token: write  # Required for OIDC (npm trusted publishing)
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm ci
+      - run: |
+           echo "event=$GITHUB_EVENT_NAME"
+           echo "ref=$GITHUB_REF"
+           echo "workflow=$GITHUB_WORKFLOW"
+           echo "workflow_ref=$GITHUB_WORKFLOW_REF"
+      - run: npm publish

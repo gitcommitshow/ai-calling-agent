@@ -1,0 +1,23 @@
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+name: release-please
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # Create a PAT and store it as the RELEASE_PLEASE_PAT Actions secret.
+          token: ${{ secrets.RELEASE_PLEASE_PAT }}
+          # Single-package default. For a packages/ + apps/ monorepo, switch to a
+          # multi-package release-please config instead of release-type: node.
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
