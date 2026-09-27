@@ -11,6 +11,9 @@
     "node": ">=24"
   },
   "scripts": {
+    "dev": "concurrently --kill-others --names server,web \"npm run dev --workspace apps/server\" \"npm run dev --workspace apps/web\"",
+    "build": "npm run build --workspaces --if-present",
+    "start": "concurrently --kill-others --names server,web \"npm start --workspace apps/server\" \"npm start --workspace apps/web\"",
     "test": "npm test --workspaces --if-present",
     "test:e2e": "npm run test:e2e --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
@@ -23,6 +26,7 @@
     "@types/mocha": "^10.0.10",
     "@types/node": "^24.13.3",
     "chai": "^6.2.2",
+    "concurrently": "^9.2.4",
     "eslint": "^10.0.0",
     "mocha": "^11.7.6",
     "sinon": "^22.1.0",

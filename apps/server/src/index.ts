@@ -25,6 +25,14 @@ server.on('upgrade', createUpgradeListener(services));
 // A restart kills every live call, so nothing may still look in flight.
 await runner.reconcileOnStartup();
 
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    console.error(`[server] ${config.host}:${config.port} is already in use`);
+    process.exit(1);
+  }
+  throw error;
+});
+
 server.listen(config.port, config.host, () => {
   console.log(`[server] listening on http://${config.host}:${config.port}`);
   console.log(`[server] data folder: ${config.dataDir}`);
@@ -39,11 +47,15 @@ server.listen(config.port, config.host, () => {
   }
 });
 
-async function shutdown(signal: string): Promise<void> {
+/** Releases the port and exits. A hung connection must not keep the process alive. */
+function shutdown(signal: string): void {
   console.log(`[server] ${signal} received, closing`);
-  await telephony.close().catch(() => undefined);
-  server.close(() => process.exit(0));
+  const finish = () => process.exit(0);
+  setTimeout(finish, 500).unref();
+  void telephony.close().catch(() => undefined);
+  server.closeAllConnections();
+  server.close(finish);
 }
 
-process.on('SIGINT', () => void shutdown('SIGINT'));
-process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

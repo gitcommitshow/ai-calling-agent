@@ -140,12 +140,17 @@ export class JsonStore implements Storage {
 
   async listAttempts(eventId: string): Promise<AttemptRecord[]> {
     const attempts = await readJsonDir<AttemptRecord>(join(this.eventDir(eventId), 'attempts'));
-    return attempts.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return attempts
+      .map(normalizeAttempt)
+      .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
   async getAttempt(eventId: string, attemptId: string): Promise<AttemptRecord | null> {
     assertSafeId('attempt', attemptId);
-    return readJson<AttemptRecord>(join(this.eventDir(eventId), 'attempts', `${attemptId}.json`));
+    const attempt = await readJson<AttemptRecord>(
+      join(this.eventDir(eventId), 'attempts', `${attemptId}.json`),
+    );
+    return attempt ? normalizeAttempt(attempt) : null;
   }
 
   async putAttempt(attempt: AttemptRecord): Promise<void> {
@@ -199,6 +204,26 @@ function normalizeCampaign(campaign: CampaignRecord): CampaignRecord {
   return {
     ...campaign,
     useMasterPrompt: campaign.useMasterPrompt === true,
+  };
+}
+
+/**
+ * Older attempt files omit status, timeline, and provider ids. One that already
+ * has an outcome is a finished call, so a restart must not close it out again.
+ */
+function normalizeAttempt(attempt: AttemptRecord): AttemptRecord {
+  const finished = attempt.status === 'done' || attempt.outcome != null || attempt.endedAt != null;
+  return {
+    ...attempt,
+    status: finished ? 'done' : (attempt.status ?? 'dialing'),
+    runId: attempt.runId ?? null,
+    transcript: Array.isArray(attempt.transcript) ? attempt.transcript : [],
+    capturedFields: attempt.capturedFields ?? {},
+    fallbackUsed: attempt.fallbackUsed === true,
+    providerCallId: attempt.providerCallId ?? null,
+    voiceSessionId: attempt.voiceSessionId ?? null,
+    timeline: Array.isArray(attempt.timeline) ? attempt.timeline : [],
+    error: attempt.error ?? null,
   };
 }
 

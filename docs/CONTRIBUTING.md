@@ -10,10 +10,11 @@ Start with [REQUIREMENTS.md](REQUIREMENTS.md). Then update [DESIGN.md](DESIGN.md
 git clone <this repo> && cd ai-calling-agent
 npm ci
 cp .env.example .env
-npm run seed --workspace apps/server   # optional example events
-npm run dev --workspace apps/server    # terminal 1, port 4000
-npm run dev --workspace apps/web       # terminal 2, port 3000
+npm run seed   # optional example events
+npm run dev    # server on port 4000, web on port 3000
 ```
+
+`npm run dev` loads `.env` when that file exists. To run one app on its own, use `npm run dev --workspace apps/server` or `npm run dev --workspace apps/web`.
 
 There is a sample Luma export at [apps/web/fixtures/luma-sample-guests.csv](../apps/web/fixtures/luma-sample-guests.csv) for trying the import without real guest data.
 

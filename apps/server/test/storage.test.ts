@@ -87,4 +87,29 @@ describe('JsonStore', () => {
     await rejects(() => store.getEvent('../../etc'), /invalid event id/);
     await rejects(() => store.getGuest('launch-party-1234abcd', '..'), /invalid guest id/);
   });
+
+  it('reads an older attempt file that has no status or timeline as a finished call', async () => {
+    const eventId = 'founders-dinner-e2319755';
+    await writeJsonAtomic(join(dataDir, 'events', eventId, 'attempts', '20260927122811-f6d27940.json'), {
+      id: '20260927122811-f6d27940',
+      eventId,
+      campaignId: 'post-event-bf98eee4',
+      guestId: 'seed-gst-11-0f289002b7',
+      outcome: 'answered',
+      startedAt: '2026-09-27T12:28:11.953Z',
+      endedAt: '2026-09-27T12:29:46.953Z',
+      transcript: [],
+      capturedFields: { attended: 'yes' },
+      voiceBackend: 'elevenlabs',
+      fallbackUsed: false,
+      error: null,
+    });
+
+    const [attempt] = await store.listAttempts(eventId);
+    expect(attempt.status).to.equal('done');
+    expect(attempt.outcome).to.equal('answered');
+    expect(attempt.timeline).to.deep.equal([]);
+    expect(attempt.runId).to.equal(null);
+    expect(await store.getAttempt(eventId, attempt.id)).to.deep.equal(attempt);
+  });
 });

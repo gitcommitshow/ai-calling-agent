@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { Icon } from './Icon';
 import { APPROVAL_STATUS_ICONS } from './status-icons';
+import { defaultCampaign } from '../domain/default-campaign';
 import {
   checkEligibility,
   countAttemptsByGuest,
@@ -48,11 +49,12 @@ interface Props {
 
 export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props) {
   const router = useRouter();
-  const [campaignId, setCampaignId] = useState(campaigns[0]?.id ?? '');
+  const initialCampaign = defaultCampaign(campaigns, event, new Date(nowIso));
+  const [campaignId, setCampaignId] = useState(initialCampaign?.id ?? '');
   const [statuses, setStatuses] = useState<ApprovalStatus[]>([]);
   const [ticketName, setTicketName] = useState('');
   const [search, setSearch] = useState('');
-  const [queue, setQueue] = useState<string[]>(campaigns[0]?.queue ?? []);
+  const [queue, setQueue] = useState<string[]>(initialCampaign?.queue ?? []);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);

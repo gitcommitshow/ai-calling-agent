@@ -43,10 +43,11 @@ The browser talks only to the web app's route handlers, which forward to the ser
 ```
 npm ci
 cp .env.example .env
-npm run seed --workspace apps/server   # optional example events
-npm run dev --workspace apps/server    # terminal 1, http://127.0.0.1:4000
-npm run dev --workspace apps/web       # terminal 2, http://localhost:3000
+npm run seed   # optional example events
+npm run dev    # server http://127.0.0.1:4000, web http://localhost:3000
 ```
+
+`npm run dev` loads `.env` when that file exists, then starts both apps. Shell variables win over `.env`. To run one app on its own, use `npm run dev --workspace apps/server` or `npm run dev --workspace apps/web`.
 
 A sample Luma export to import is at [apps/web/fixtures/luma-sample-guests.csv](apps/web/fixtures/luma-sample-guests.csv).
 
@@ -64,6 +65,9 @@ Everything except calling works with no credentials. The server logs which varia
 
 | Script | What it does |
 | --- | --- |
+| `npm run dev` | Start the API server and the web app for local development, loading `.env` when it exists. |
+| `npm run build` | Build the web app for production. |
+| `npm start` | Start the API server and the built web app, loading `.env` when it exists. |
 | `npm test` | Mocha on `test/**/*.test.ts` in every workspace. No live services. |
 | `npm run test:e2e` | Live-provider tests (`*.e2e.test.ts`). CI does not run these. |
 | `npm run typecheck` | `tsc --noEmit` per workspace. |

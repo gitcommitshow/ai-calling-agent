@@ -73,19 +73,19 @@ Provider credentials live only in the server environment. They are never sent to
 
 ```
 npm ci
-npm run seed --workspace apps/server   # optional example data
-npm run dev --workspace apps/server    # terminal 1
-npm run dev --workspace apps/web       # terminal 2
+cp .env.example .env
+npm run seed   # optional example data
+npm run dev    # server on port 4000, web on port 3000
 ```
 
-Then open `http://localhost:3000`.
+Then open `http://localhost:3000`. `npm run dev` loads `.env` when that file exists and starts both apps. Shell variables win over `.env`. To run one app on its own, use `npm run dev --workspace apps/server` or `npm run dev --workspace apps/web`.
 
 ### Without dialing anything
 
 To work on the run loop with no carrier and no provider spend:
 
 ```
-TELEPHONY_PROVIDER=fake VOICE_PROVIDER=fake npm run dev --workspace apps/server
+TELEPHONY_PROVIDER=fake VOICE_PROVIDER=fake npm run dev
 ```
 
 The fake carrier answers immediately and the fake backend speaks a scripted exchange, so runs, attempts, timelines, and extraction all behave as they would on a real call. No number is dialed.
@@ -102,9 +102,22 @@ Plivo has to reach the server, so it needs a public https origin. Locally that m
 
 The audio socket is derived from the same origin (`wss://.../telephony/plivo/stream/:attemptId`), so a tunnel that does not forward WebSockets will connect the call and then carry no audio.
 
+## Run it in production
+
+```
+npm ci
+cp .env.example .env
+npm run build
+npm start
+```
+
+`npm run build` builds the web app. `npm start` loads `.env` when that file exists, then runs the API server and `next start` for the web app. Shell variables win over `.env`. The server runs from TypeScript through `tsx`, which `npm ci` installs. Open `http://localhost:3000`. Ctrl+C stops both processes.
+
+There is no host yet. Record it here before anything is actually deployed.
+
 ## Release path
 
-None yet. Release-please still tags versions from conventional commits on `main`; `publish.yml` stays inactive because no workspace is publishable. Before anything ships, record the host and the process here first.
+None yet. Release-please still tags versions from conventional commits on `main`; `publish.yml` stays inactive because no workspace is publishable. The process, once a host exists, is the production run above.
 
 ## Rollback
 
@@ -114,7 +127,7 @@ Stop both processes. Data lives in plain JSON files under `DATA_DIR`, one folder
 
 - Server: `GET /health` returns `{"ok":true,"calling":{"ready":...,"missing":[...]}}`. On start it logs its port, data folder, chosen adapters, and anything missing.
 - The runner logs one line per attempt with its outcome, and one line per skipped guest with the reason.
-- Web: Next.js dev server logs to its terminal. If a page shows "cannot reach the server", the server process is down or `SERVER_URL` is wrong.
+- Web: the Next.js process logs to its terminal. If a page shows "cannot reach the server", the server process is down or `SERVER_URL` is wrong.
 
 ## Do not
 

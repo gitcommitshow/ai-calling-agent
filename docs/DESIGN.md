@@ -114,6 +114,9 @@ jambonz is a voice platform that connects SIP carriers to speech, LLM, and speec
 
 Revisit if we need many telephony carriers, high concurrency, or inbound calls. When we do, it becomes another telephony adapter (D6), not a rewrite.
 
+And related to this, do not use [dograh](https://github.com/dograh-hq/dograh] or [Patter](https://github.com/PatterAI/Patter) either.
+They won't provide as much flexibility and control as jambonz would.
+
 **D8. Minimal dependencies and incremental extraction (2026-09-27).**
 Prefer Node built-ins (fetch, the built-in WebSocket client) and direct REST or WebSocket calls to providers over vendor SDKs, where the provider surface we need is small. This applies to Plivo, ElevenLabs, Anthropic, and OpenAI. We add a dependency only when writing it ourselves would be risky or large:
 - Next.js (MIT), with React and React DOM (MIT), for the web app;
@@ -122,6 +125,7 @@ Prefer Node built-ins (fetch, the built-in WebSocket client) and direct REST or 
 - resilient-llm (MIT) for extraction, added in phase 2 for the reasons in D10;
 - the Google Cloud Speech client (Apache-2.0) when the cascaded backend arrives, because streaming recognition runs over gRPC;
 - Papa Parse (MIT) as the CSV parser, chosen in phase 1, because Luma exports contain quoted fields with commas and line breaks. It runs in the browser during upload, so the raw file never reaches the server.
+- concurrently (MIT) to run the server and the web app from `npm run dev` and `npm start`. Ctrl+C has to stop both, and a hand-rolled supervisor kept leaving the server bound to its port.
 
 The API still uses `node:http` and storage still uses `node:fs`. Plivo, ElevenLabs, and Anthropic or OpenAI are reached over plain REST and WebSocket calls, with no vendor SDKs.
 
