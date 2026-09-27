@@ -11,9 +11,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently --kill-others --names server,web \"npm run dev --workspace apps/server\" \"npm run dev --workspace apps/web\"",
+    "dev": "node --env-file-if-exists=.env node_modules/concurrently/dist/bin/concurrently.js --kill-others --names server,web \"npm run dev --workspace apps/server\" \"npm run dev --workspace apps/web\"",
     "build": "npm run build --workspaces --if-present",
-    "start": "concurrently --kill-others --names server,web \"npm start --workspace apps/server\" \"npm start --workspace apps/web\"",
+    "start": "node --env-file-if-exists=.env node_modules/concurrently/dist/bin/concurrently.js --kill-others --names server,web \"npm start --workspace apps/server\" \"npm start --workspace apps/web\"",
     "test": "npm test --workspaces --if-present",
     "test:e2e": "npm run test:e2e --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",

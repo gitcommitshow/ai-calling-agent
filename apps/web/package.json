@@ -5,9 +5,9 @@
   "description": "Organizer web app: events, guests, campaigns, results",
   "type": "module",
   "scripts": {
-    "dev": "next dev --port 3000",
+    "dev": "next dev --port ${WEB_PORT:-3000}",
     "build": "next build",
-    "start": "next start --port 3000",
+    "start": "next start --port ${WEB_PORT:-3000}",
     "test": "mocha --config ../../.mocharc.json \"test/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },

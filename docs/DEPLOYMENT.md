@@ -28,6 +28,7 @@ Everything except calling works with none of this set. The server logs the missi
 | `PORT` | server | `4000` |
 | `HOST` | server | `127.0.0.1` |
 | `DATA_DIR` | server | `./data` relative to `apps/server` |
+| `WEB_PORT` | web | `3000` |
 | `SERVER_URL` | web | `http://127.0.0.1:4000` |
 
 Calling, all server-side only:
@@ -111,7 +112,7 @@ npm run build
 npm start
 ```
 
-`npm run build` builds the web app. `npm start` loads `.env` when that file exists, then runs the API server and `next start` for the web app. Shell variables win over `.env`. The server runs from TypeScript through `tsx`, which `npm ci` installs. Open `http://localhost:3000`. Ctrl+C stops both processes.
+`npm run build` builds the web app. `npm start` loads `.env` when that file exists, then runs the API server and `next start` for the web app. Shell variables win over `.env`. The server runs from TypeScript through `tsx`, which `npm ci` installs. The site listens on `WEB_PORT` (default 3000). Set `WEB_PORT` to a free port when another program is using 3000, and point the host proxy at that port. `PORT` stays the API on 4000, so the two never share one variable. Ctrl+C stops both processes.
 
 There is no host yet. Record it here before anything is actually deployed.
 
