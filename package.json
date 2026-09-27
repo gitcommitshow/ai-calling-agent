@@ -1,23 +1,30 @@
 {
-  "name": "ai-agent-template",
+  "name": "ai-calling-agent",
   "version": "0.1.0",
   "private": true,
-  "description": "Hygiene-only starter for AI agent projects",
+  "description": "Outbound AI calling agent for event organizers",
   "type": "module",
+  "workspaces": [
+    "apps/*"
+  ],
   "engines": {
     "node": ">=24"
   },
   "scripts": {
-    "test": "node --import tsx --test \"test/**/*.test.ts\"",
-    "test:e2e": "node --import tsx --test \"e2e/**/*.e2e.test.ts\"",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint --no-error-on-unmatched-pattern src test"
+    "test": "npm test --workspaces --if-present",
+    "test:e2e": "npm run test:e2e --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint --no-error-on-unmatched-pattern apps",
+    "seed": "npm run seed --workspace apps/server"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
+    "@types/chai": "^5.2.3",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^24.13.3",
     "chai": "^6.2.2",
     "eslint": "^10.0.0",
+    "mocha": "^11.7.6",
     "sinon": "^22.1.0",
     "tsx": "^4.20.5",
     "typescript": "^6.0.0",

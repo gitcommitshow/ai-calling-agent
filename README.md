@@ -1,114 +1,106 @@
-# ai-agent-template
+# ai-calling-agent
 
----
+An outbound AI calling agent for event organizers. Import a guest list, choose who to call and in what order, write the prompt once, and get a structured result per guest without listening to every call.
 
-## About the template
+**Status: phase 2 of the MVP.** The outbound call loop is built: Plivo dials, an ElevenLabs agent holds the conversation, and the transcript becomes the campaign's fields. Calling needs provider credentials and a public https origin, so it stays off until those are set. See the phase plan in [docs/DESIGN.md](docs/DESIGN.md).
 
-This is a hygiene-only starter to build AI agent projects with AI Native Development approach. It is not an agent framework and it does not pick a repo layout.
+## What works today
 
-Use it to skip the first hour of setup: GitHub Actions, TypeScript tooling, test conventions, and structured docs. You add the agent stack and the folder layout.
+- Create an event with its name, start, and end time (entered as IST).
+- Import a Luma guest CSV: known columns mapped, approval statuses preserved, custom question columns kept as guest attributes, guests without a callable Indian number skipped and counted.
+- Filter guests by approval status, ticket type, and free text; select a subset; order the call queue; save it per campaign.
+- Edit a campaign: prompt with placeholders, conversation language, fields to capture, calling window, attempts per guest. The prompt preview is the exact text a call uses.
+- See per-guest eligibility with the reason a guest cannot be called yet.
+- Call one guest, or run the saved queue one guest at a time, and stop it mid-run.
+- Watch a run live: who is on the phone, how far through the queue it is, and which guests were skipped and why.
+- Read per-attempt results: the call's timeline, the transcript, the captured fields, and the outcome.
 
-### Features
+## How a call works
 
-- Private root `package.json` for tooling only. No `src/`, no `packages/`, no `apps/`.
-- TypeScript, ESLint 10, node:test, Chai, and Sinon. `npm test`, `typecheck`, and `lint` succeed with no source.
-- GitHub Actions: unit tests on push/PR, release-please, npm publish with provenance, optional `@claude`.
-- Docs stubs: requirements, design, style guide, contributing, and deployment.
-- `.env.example` with generic API key placeholders.
-- Single-package publish/release defaults, with notes for a later `packages/` + `apps/` workspace.
+Our server always sits between the phone call and the voice backend, which is what makes the voice approaches swappable (DESIGN D1).
 
-### What this is not
+1. The runner re-checks the guardrails, then dials through Plivo. The number is always read from storage by guest id, so a number that is not on the list can never be called.
+2. When the guest answers, Plivo streams the call audio to the server over a WebSocket.
+3. The server bridges that audio to an ElevenLabs agent session, overriding its prompt and language with the campaign's, and saves transcript turns as they arrive.
+4. When the call ends, the end reason becomes the outcome, and one extraction step fills in the campaign's fields. Anything unclear is stored as `unknown`.
 
-- Not a CLI, HTTP service, or npm library skeleton
-- Not LangGraph, the Vercel AI SDK, or any other agent loop
-- Not a `packages/` + `apps/` monorepo (and not a root `src/` app either)
+Call audio is relayed and dropped. Only the transcript is kept.
 
-## How to use this template
+## Layout
 
-### First-clone checklist
+npm workspaces, two apps, no shared packages yet (DESIGN D5).
 
-- [ ] Create a repo from this template and clone it.
-- [ ] Change the title and overview at the top of this README to the project.
-- [ ] Rename the root `name` in `package.json` to your project. Keep `"private": true` until you intentionally publish.
-- [ ] Set the GitHub Actions secrets you will actually use.
-- [ ] Draft [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) and keep it current. That file is the product source of truth.
-- [ ] Draft [docs/DESIGN.md](docs/DESIGN.md) from those requirements. That file is the technical source of truth so later agent sessions do not drift.
-- [ ] Fill [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md) if the project has a UI.
-- [ ] Set the GitHub Actions secrets you will actually use.
-- [ ] Fill [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) with how you want changes made.
-- [ ] Start building features one by one with the help of your coding agent or creating issues in GitHub and assign them to `claude` .
-- [ ] Fill [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) when the project ships somewhere. Write "local-only" if it does not.
-- [ ] Delete the "about the template". Keep or rewrite everything under "Project scaffolding".
+```
+apps/server   Node HTTP API and JSON file storage. Owns the data folder.
+apps/web      Next.js organizer UI. Owns the product rules in src/domain.
+docs/         Requirements, design, style guide, contributing, deployment.
+```
 
+The browser talks only to the web app's route handlers, which forward to the server. The server is the only process that reads or writes `data/`.
 
+## Run it
 
-### Repo layout
+```
+npm ci
+cp .env.example .env
+npm run seed --workspace apps/server   # optional example events
+npm run dev --workspace apps/server    # terminal 1, http://127.0.0.1:4000
+npm run dev --workspace apps/web       # terminal 2, http://localhost:3000
+```
 
-This template does not scaffolds repo layout.
+A sample Luma export to import is at [apps/web/fixtures/luma-sample-guests.csv](apps/web/fixtures/luma-sample-guests.csv).
 
-If you're working with javascript/typescript project, you may try one of the following layout.
+Everything except calling works with no credentials. The server logs which variables are still missing on start, and `GET /health` reports the same list. To work on the run loop with no carrier and no provider spend, set `TELEPHONY_PROVIDER=fake` and `VOICE_PROVIDER=fake`: calls are simulated end to end and nothing is dialed. For real calls, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
-**Single package.** Add `src/` and `test/` at the repo root. `publish.yml` and release-please (`release-type: node`) already assume this shape. Before the publish workflow can succeed: set `"private": false` in `package.json`, set a unique npm `name`, and configure npm trusted publishing for that package.
-
-**Monorepo (**`packages/` **+** `apps/`**).** Add those folders, then turn the root into an npm or pnpm workspace. Keep the root `"private": true` and never publish it. Replace the root `release-type: node` config with a [multi-package release-please manifest](https://github.com/googleapis/release-please#manifest-driven-release). Stop publishing the root. Point `publish.yml` at workspace packages. Root `npm test` / `typecheck` / `lint` only look at root `src/` and `test/`. Wire workspace scripts when you add packages.
-
-### Template secrets
-
-`test.yml` is the only workflow you need on day one. The others stay as single-package defaults.
-
-Create `RELEASE_PLEASE_PAT` as a GitHub Actions secret holding a PAT that can open release PRs. Skip `ANTHROPIC_API_KEY` until you want `@claude` on issues and PRs.
-
----
-
-
-
-## Project scaffolding
-
-Keep what still matches. Rewrite the rest for the project. You do not have to delete this heading.
-
-### Features
-
-
-
-### Docs
+## Docs
 
 - Product: [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md)
-- Technical design: [docs/DESIGN.md](docs/DESIGN.md)
+- Technical design and decisions: [docs/DESIGN.md](docs/DESIGN.md)
 - Visual UI: [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md)
 - How to contribute: [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)
-- How it ships: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- How it runs and ships: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 
+## Scripts
 
+| Script | What it does |
+| --- | --- |
+| `npm test` | Mocha on `test/**/*.test.ts` in every workspace. No live services. |
+| `npm run test:e2e` | Live-provider tests (`*.e2e.test.ts`). CI does not run these. |
+| `npm run typecheck` | `tsc --noEmit` per workspace. |
+| `npm run lint` | ESLint across `apps/`. |
+| `npm run seed` | Write example events, guests, and attempts into the server's data folder. |
 
-### Scripts
+Per workspace, add `--workspace apps/server` or `--workspace apps/web`.
 
+## Tests
 
-| Script              | What it does                                                                           |
-| ------------------- | -------------------------------------------------------------------------------------- |
-| `npm test`          | `node --test` on `test/**/*.test.ts`, excluding `*.e2e.test.ts`.                       |
-| `npm run test:e2e`  | `node --test` on `test/**/*.e2e.test.ts`. CI does not run this.                        |
-| `npm run typecheck` | `tsc --noEmit`. Add `src/` or `test/` TypeScript before this is useful.                |
-| `npm run lint`      | ESLint on `src/` and `test/` if those folders exist.                                   |
+Unit and integration tests live in `apps/*/test`, run under Mocha with Chai and Sinon, and cover CSV mapping, phone normalization, filtering and ordering, eligibility rules, the storage write guarantees, the runner's queue loop, and the Plivo adapter's translation. Providers are always replaced with fakes; CI runs `npm test` only.
 
+One live test places a real call:
 
-Dev dependencies are TypeScript, Chai, Sinon, ESLint, and typescript-eslint. Tests run on Node's built-in test runner. No model SDKs until you add them.
+```
+E2E_TEST_NUMBER=+919876543210 npm run test:e2e --workspace apps/server
+```
 
-### Tests
+It skips itself unless that number and the provider credentials are set, so nobody triggers a call by accident.
 
-- Unit and integration tests live under `test/` as `*.test.ts` and are run by `npm test` (no live third-party services).
-- End-to-end tests that call live APIs live under `test/` as `*.e2e.test.ts` and are run only by `npm run test:e2e`.
-- CI runs `npm test` only.
+## API surface
 
+The server exposes JSON over HTTP for the web app:
 
+```
+GET  /health
+GET  /events                          POST /events
+GET  /events/:id                      PUT  /events/:id
+GET  /events/:id/guests               POST /events/:id/guests/import
+GET  /events/:id/campaigns            POST /events/:id/campaigns
+GET  /campaigns/:id                   PUT  /campaigns/:id
+GET  /events/:id/attempts             GET  /events/:id/summary
+POST /campaigns/:id/calls             POST /campaigns/:id/runs
+GET  /runs/:id                        POST /runs/:id/stop
+GET  /events/:id/runs
+```
 
-### GitHub Actions
+`POST /campaigns/:id/calls` calls one guest and `POST /campaigns/:id/runs` works the saved queue. Both answer 202 with a run to follow, and both read every number from storage by guest id. The server runs one call at a time and refuses a second run with 409.
 
-
-| Workflow                                                                       | When it runs                           | Required secret                                                                              |
-| ------------------------------------------------------------------------------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `[.github/workflows/test.yml](.github/workflows/test.yml)`                     | Push and PR to `main`                  | None                                                                                         |
-| `[.github/workflows/release-please.yml](.github/workflows/release-please.yml)` | Push to `main`                         | `RELEASE_PLEASE_PAT`                                                                         |
-| `[.github/workflows/publish.yml](.github/workflows/publish.yml)`               | GitHub release created                 | [npm trusted publishing (OIDC)](https://docs.npmjs.com/trusted-publishers), not an npm token |
-| `[.github/workflows/claude.yml](.github/workflows/claude.yml)`                 | `@claude` comments or a `claude` label | `ANTHROPIC_API_KEY` (optional)                                                               |
-
-
+Plivo also reaches `POST /telephony/plivo/{answer,ring,hangup}/:attemptId` and the audio socket at `/telephony/plivo/stream/:attemptId`. Those are defined by the telephony adapter, are signature-checked, and are not for the web app.
