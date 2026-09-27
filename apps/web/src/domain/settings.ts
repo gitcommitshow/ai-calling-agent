@@ -1,0 +1,75 @@
+/**
+ * Org-wide settings shapes and the catalog of context fields an admin can
+ * allow or withhold from the voice backend. Mirrors the server module; product
+ * copy (labels) lives here because only the UI shows them.
+ */
+import type { CampaignType } from './types';
+
+export const CONTEXT_FIELD_IDS = [
+  'event.name',
+  'event.startsAt',
+  'event.endsAt',
+  'guest.name',
+  'guest.firstName',
+  'guest.ticketName',
+  'guest.email',
+  'guest.approvalStatus',
+  'guest.phone',
+  'guest.attributes',
+  'campaign.language',
+  'capture.fields',
+] as const;
+
+export type ContextFieldId = (typeof CONTEXT_FIELD_IDS)[number];
+
+export interface OrgSettings {
+  masterPrompts: Record<CampaignType, string>;
+  contextFields: ContextFieldId[];
+  updatedAt: string;
+}
+
+/** Labels and short reasons for each gate, shown on the settings page. */
+export const CONTEXT_FIELD_META: Record<
+  ContextFieldId,
+  { label: string; hint: string }
+> = {
+  'event.name': { label: 'Event name', hint: 'Placeholder {{event.name}} and call context.' },
+  'event.startsAt': {
+    label: 'Event start time',
+    hint: 'Placeholder {{event.startsAt}} and call context.',
+  },
+  'event.endsAt': {
+    label: 'Event end time',
+    hint: 'Placeholder {{event.endsAt}} and call context.',
+  },
+  'guest.name': { label: 'Guest full name', hint: 'Placeholder {{guest.name}} and call context.' },
+  'guest.firstName': {
+    label: 'Guest first name',
+    hint: 'Placeholder {{guest.firstName}}.',
+  },
+  'guest.ticketName': {
+    label: 'Ticket type',
+    hint: 'Placeholder {{guest.ticketName}} and call context.',
+  },
+  'guest.email': { label: 'Guest email', hint: 'Appended to call context only when allowed.' },
+  'guest.approvalStatus': {
+    label: 'Approval status',
+    hint: 'Going / Pending / etc. Appended to call context when allowed.',
+  },
+  'guest.phone': {
+    label: 'Guest phone number',
+    hint: 'Off by default. Telephony already has the number; leaving this on can leak it into the transcript.',
+  },
+  'guest.attributes': {
+    label: 'Custom CSV answers',
+    hint: 'All unknown columns from the Luma import (dietary needs, etc.).',
+  },
+  'campaign.language': {
+    label: 'Conversation language',
+    hint: 'Tells the agent which language to speak.',
+  },
+  'capture.fields': {
+    label: 'Fields to capture',
+    hint: 'The structured questions the agent must try to answer before hanging up.',
+  },
+};

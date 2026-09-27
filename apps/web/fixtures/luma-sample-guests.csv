@@ -1,0 +1,9 @@
+api_id,name,first_name,last_name,email,phone_number,created_at,approval_status,ticket_name,checked_in_at,What should we know?
+gst-001,Asha Rao,Asha,Rao,asha@example.com,+91 98765 43210,2026-09-01T10:00:00.000Z,approved,General,,"Vegetarian, no nuts"
+gst-002,Vikram Shah,Vikram,Shah,vikram@example.com,9876543211,2026-09-02T11:30:00.000Z,pending_approval,VIP,,Bringing a colleague
+gst-003,Neha Iyer,Neha,Iyer,neha@example.com,09876543212,2026-09-03T09:15:00.000Z,invited,General,,
+gst-004,Rahul Menon,Rahul,Menon,rahul@example.com,+919876543213,2026-09-04T12:00:00.000Z,waitlist,General,,"Prefers Hindi
+Calling after 6pm is better"
+gst-005,Divya Nair,Divya,Nair,divya@example.com,9876543214,2026-09-05T14:45:00.000Z,declined,General,,
+gst-006,No Phone Person,No Phone,Person,nophone@example.com,,2026-09-06T15:00:00.000Z,approved,General,,
+gst-007,Sam Fox,Sam,Fox,sam@example.com,+1 202 555 0143,2026-09-07T16:20:00.000Z,approved,General,,Visiting from the US
