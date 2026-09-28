@@ -18,6 +18,7 @@ import type {
   GuestRecord,
   RunRecord,
   Storage,
+  TestCallRecord,
 } from './types.ts';
 import { defaultOrgSettings, type OrgSettings } from './settings.ts';
 
@@ -33,10 +34,12 @@ function assertSafeId(kind: string, id: string): void {
 export class JsonStore implements Storage {
   private readonly eventsDir: string;
   private readonly settingsPath: string;
+  private readonly testCallsDir: string;
 
   constructor(private readonly dataDir: string) {
     this.eventsDir = join(dataDir, 'events');
     this.settingsPath = join(dataDir, 'settings.json');
+    this.testCallsDir = join(dataDir, 'test-calls');
   }
 
   /** Org settings sit next to events/, one file for the whole deployment. */
@@ -51,6 +54,7 @@ export class JsonStore implements Storage {
         ...stored.masterPrompts,
       },
       contextFields: stored.contextFields ?? defaultOrgSettings().contextFields,
+      testNumber: typeof stored.testNumber === 'string' ? stored.testNumber : null,
     };
   }
 
@@ -188,6 +192,29 @@ export class JsonStore implements Storage {
 
   async listEventIds(): Promise<string[]> {
     return listDirNames(this.eventsDir);
+  }
+
+  /** Pipeline tests live next to events/, never inside an event folder. */
+  async listAllTestCalls(): Promise<TestCallRecord[]> {
+    const calls = await readJsonDir<TestCallRecord>(this.testCallsDir);
+    return calls.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+  }
+
+  async listTestCalls(eventId: string | null): Promise<TestCallRecord[]> {
+    const calls = await this.listAllTestCalls();
+    return calls.filter((call) =>
+      eventId === null ? call.eventId === null : call.eventId === eventId,
+    );
+  }
+
+  async getTestCall(id: string): Promise<TestCallRecord | null> {
+    assertSafeId('test-call', id);
+    return readJson<TestCallRecord>(join(this.testCallsDir, `${id}.json`));
+  }
+
+  async putTestCall(call: TestCallRecord): Promise<void> {
+    assertSafeId('test-call', call.id);
+    await writeJsonAtomic(join(this.testCallsDir, `${call.id}.json`), call);
   }
 
   /** Exposed for the seed script and tests that want to inspect the folder. */

@@ -118,6 +118,13 @@ export const LIVE_RUN_STATUSES: readonly RunStatus[] = ['running', 'stopping'];
 
 export type RunKind = 'queue' | 'single';
 
+/** Where a pipeline test got its prompt. Mirrors the server stored source. */
+export type TestCallPromptSource =
+  | { kind: 'builtin' }
+  | { kind: 'master'; campaignType: CampaignType }
+  | { kind: 'campaign'; campaignId: string }
+  | { kind: 'custom'; prompt: string };
+
 export interface SkippedGuest {
   guestId: string;
   reason: string;
@@ -229,6 +236,28 @@ export interface Run {
   skipped: SkippedGuest[];
   startedAt: string;
   endedAt: string | null;
+  error: string | null;
+}
+
+/** One pipeline test call, stored apart from guest attempts. */
+export interface TestCall {
+  id: string;
+  eventId: string | null;
+  to: string;
+  promptSource: TestCallPromptSource;
+  language: Language;
+  fields: CaptureField[];
+  status: AttemptStatus;
+  outcome: CallOutcome | null;
+  startedAt: string;
+  endedAt: string | null;
+  transcript: TranscriptTurn[];
+  capturedFields: Record<string, string>;
+  voiceBackend: VoiceBackend | null;
+  fallbackUsed: boolean;
+  providerCallId: string | null;
+  voiceSessionId: string | null;
+  timeline: AttemptEvent[];
   error: string | null;
 }
 

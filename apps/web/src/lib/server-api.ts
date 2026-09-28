@@ -10,6 +10,7 @@ import type {
   Guest,
   GuestPayload,
   Run,
+  TestCall,
 } from '../domain/types';
 import type { CampaignTemplate } from '../domain/campaign-templates';
 import type { OrgSettings } from '../domain/settings';
@@ -174,4 +175,35 @@ export async function updateSettings(
       body: JSON.stringify(patch),
     })
   ).settings;
+}
+
+export type TestCallPromptSourceInput =
+  | { kind: 'default' }
+  | { kind: 'master'; campaignType: 'pre-event' | 'post-event' }
+  | { kind: 'campaign'; campaignId: string }
+  | { kind: 'custom'; prompt: string };
+
+/** List pipeline tests for one scope. Omit eventId for global tests only. */
+export async function listTestCalls(eventId?: string): Promise<TestCall[]> {
+  const query = eventId ? `?eventId=${encodeURIComponent(eventId)}` : '';
+  return (await request<{ testCalls: TestCall[] }>(`/test-calls${query}`)).testCalls;
+}
+
+/** Place a pipeline test. Returns immediately; the call runs in the background. */
+export async function startTestCall(input: {
+  eventId?: string;
+  to?: string;
+  promptSource?: TestCallPromptSourceInput;
+}): Promise<TestCall> {
+  return (
+    await request<{ testCall: TestCall }>('/test-calls', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  ).testCall;
+}
+
+/** Hang up a live pipeline test. */
+export async function stopTestCall(id: string): Promise<TestCall> {
+  return (await request<{ testCall: TestCall }>(`/test-calls/${id}/stop`, { method: 'POST' })).testCall;
 }

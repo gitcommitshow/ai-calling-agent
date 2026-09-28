@@ -4,12 +4,16 @@
  */
 declare module 'sinon' {
   export interface SinonStub {
-    (...args: unknown[]): unknown;
+    (...args: never[]): any;
     resolves(value?: unknown): SinonStub;
+    firstCall: { args: any[] };
+    restore(): void;
+    called: boolean;
   }
 
   export interface SinonStatic {
     stub(): SinonStub;
+    stub(obj: object, method: PropertyKey): SinonStub;
     restore(): void;
   }
 

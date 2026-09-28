@@ -20,6 +20,7 @@ import type {
 } from '../storage/types.ts';
 
 const E164 = /^\+[1-9]\d{7,14}$/;
+const INDIAN_MOBILE_E164 = /^\+91[6-9]\d{9}$/;
 const CLOCK_TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 const FIELD_KEY = /^[a-z][a-z0-9_]{0,39}$/;
 
@@ -64,6 +65,19 @@ export type CampaignPatch = Partial<Omit<CampaignInput, 'type'>>;
 
 export interface CallRequestInput {
   guestId: string;
+}
+
+/** Prompt choice on a test-call request before the server resolves defaults. */
+export type TestCallPromptSourceInput =
+  | { kind: 'default' }
+  | { kind: 'master'; campaignType: CampaignType }
+  | { kind: 'campaign'; campaignId: string }
+  | { kind: 'custom'; prompt: string };
+
+export interface TestCallRequestInput {
+  eventId: string | null;
+  to: string | null;
+  promptSource: TestCallPromptSourceInput;
 }
 
 function asRecord(value: unknown, what: string): Record<string, unknown> {
@@ -255,6 +269,20 @@ function parseBoolean(value: unknown, what: string): boolean {
   return value;
 }
 
+/** Indian mobile in E.164. Pipeline tests are the only request that may send a number. */
+function parseIndianMobile(value: unknown, what: string): string {
+  const text = requireString(value, what, 16);
+  if (!INDIAN_MOBILE_E164.test(text)) {
+    throw badRequest(`${what} must be an Indian mobile in +91 E.164 form`);
+  }
+  return text;
+}
+
+function parseOptionalIndianMobile(value: unknown, what: string): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  return parseIndianMobile(value, what);
+}
+
 export function parseCampaignInput(body: unknown): CampaignInput {
   const record = asRecord(body, 'campaign');
   return {
@@ -296,12 +324,6 @@ export function parseCampaignPatch(body: unknown): CampaignPatch {
   return patch;
 }
 
-/** A call request names a guest id only. The number always comes from storage. */
-export function parseCallRequestInput(body: unknown): CallRequestInput {
-  const record = asRecord(body, 'call request');
-  return { guestId: requireString(record.guestId, 'guestId', 120) };
-}
-
 /** Validate a full settings put. Master prompts and the context allowlist are required. */
 export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updatedAt'> {
   const record = asRecord(body, 'settings');
@@ -323,6 +345,48 @@ export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updated
       'post-event': requireString(prompts['post-event'], 'masterPrompts.post-event', 20000),
     },
     contextFields,
+    testNumber: parseOptionalIndianMobile(record.testNumber, 'testNumber'),
   };
+}
+
+/** A call request names a guest id only. The number always comes from storage. */
+export function parseCallRequestInput(body: unknown): CallRequestInput {
+  const record = asRecord(body, 'call request');
+  return { guestId: requireString(record.guestId, 'guestId', 120) };
+}
+
+/** Parse a pipeline test request. Omitted `to` means the saved test number. */
+export function parseTestCallRequestInput(body: unknown): TestCallRequestInput {
+  const record = asRecord(body, 'test call');
+  return {
+    eventId: optionalString(record.eventId, 'eventId', 120),
+    to: parseOptionalIndianMobile(record.to, 'to'),
+    promptSource: parseTestCallPromptSource(record.promptSource),
+  };
+}
+
+function parseTestCallPromptSource(value: unknown): TestCallPromptSourceInput {
+  if (value === undefined || value === null) return { kind: 'default' };
+  const record = asRecord(value, 'promptSource');
+  const kind = requireOneOf(
+    record.kind,
+    ['default', 'master', 'campaign', 'custom'] as const,
+    'promptSource.kind',
+  );
+  if (kind === 'default') return { kind: 'default' };
+  if (kind === 'master') {
+    return {
+      kind: 'master',
+      campaignType: requireOneOf(
+        record.campaignType,
+        ['pre-event', 'post-event'] as const,
+        'promptSource.campaignType',
+      ),
+    };
+  }
+  if (kind === 'campaign') {
+    return { kind: 'campaign', campaignId: requireString(record.campaignId, 'promptSource.campaignId', 120) };
+  }
+  return { kind: 'custom', prompt: requireString(record.prompt, 'promptSource.prompt', 20000) };
 }
 

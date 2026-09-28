@@ -36,6 +36,11 @@ export function newRunId(startedAt: string): string {
   return `run-${timestampedId(startedAt)}`;
 }
 
+/** Sortable id for a pipeline test call, stored outside event folders. */
+export function newTestCallId(startedAt: string): string {
+  return `test-${timestampedId(startedAt)}`;
+}
+
 /** Sortable id: the instant, then entropy, so folder listings read in order. */
 function timestampedId(iso: string): string {
   return `${iso.replace(/[^0-9]/g, '').slice(0, 14)}-${randomUUID().slice(0, 8)}`;

@@ -71,6 +71,16 @@ export type RunStatus = 'running' | 'stopping' | 'completed' | 'stopped' | 'fail
 /** `queue` works the saved campaign queue; `single` is one guest on demand. */
 export type RunKind = 'queue' | 'single';
 
+/**
+ * Where a pipeline test got its prompt. `builtin` is the global one-click
+ * script. Master and campaign bodies are re-read when the call is answered.
+ */
+export type TestCallPromptSource =
+  | { kind: 'builtin' }
+  | { kind: 'master'; campaignType: CampaignType }
+  | { kind: 'campaign'; campaignId: string }
+  | { kind: 'custom'; prompt: string };
+
 /** A guest the runner refused to dial, with the guardrail that refused them. */
 export interface SkippedGuest {
   guestId: string;
@@ -194,6 +204,31 @@ export interface RunRecord {
   error: string | null;
 }
 
+/**
+ * One pipeline test call. Stored outside event folders so guest results and
+ * summaries never include it. `eventId` is null for a global test.
+ */
+export interface TestCallRecord {
+  id: string;
+  eventId: string | null;
+  to: string;
+  promptSource: TestCallPromptSource;
+  language: Language;
+  fields: CaptureField[];
+  status: AttemptStatus;
+  outcome: CallOutcome | null;
+  startedAt: string;
+  endedAt: string | null;
+  transcript: TranscriptTurn[];
+  capturedFields: Record<string, string>;
+  voiceBackend: VoiceBackend | null;
+  fallbackUsed: boolean;
+  providerCallId: string | null;
+  voiceSessionId: string | null;
+  timeline: AttemptEvent[];
+  error: string | null;
+}
+
 import type { OrgSettings } from './settings.ts';
 
 /**
@@ -228,4 +263,9 @@ export interface Storage {
 
   /** Event ids, so startup reconciliation can sweep every folder once. */
   listEventIds(): Promise<string[]>;
+
+  listTestCalls(eventId: string | null): Promise<TestCallRecord[]>;
+  listAllTestCalls(): Promise<TestCallRecord[]>;
+  getTestCall(id: string): Promise<TestCallRecord | null>;
+  putTestCall(call: TestCallRecord): Promise<void>;
 }

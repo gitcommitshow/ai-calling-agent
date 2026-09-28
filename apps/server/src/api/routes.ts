@@ -5,7 +5,7 @@
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
-import { HttpError, notFound, readJsonBody, sendError, sendJson } from './http.ts';
+import { HttpError, badRequest, notFound, readJsonBody, sendError, sendJson } from './http.ts';
 import {
   parseCallRequestInput,
   parseCampaignInput,
@@ -13,6 +13,8 @@ import {
   parseEventInput,
   parseGuestImportInput,
   parseOrgSettingsInput,
+  parseTestCallRequestInput,
+  type TestCallPromptSourceInput,
 } from './validate.ts';
 import { guestIdFor, newCampaignId, newEventId } from '../storage/ids.ts';
 import { CALL_OUTCOMES } from '../storage/types.ts';
@@ -20,10 +22,14 @@ import type {
   AttemptRecord,
   CallOutcome,
   CampaignRecord,
+  CaptureField,
   EventRecord,
   GuestRecord,
+  Language,
   RunRecord,
   Storage,
+  TestCallPromptSource,
+  TestCallRecord,
 } from '../storage/types.ts';
 import { GuardrailError, RunConflictError, type CallRunner } from '../runner/runner.ts';
 import type { TelephonyPort } from '../telephony/types.ts';
@@ -108,6 +114,115 @@ async function startRun(
   }
 }
 
+/** Start a pipeline test; 409 when a guest run or another test is already live. */
+async function startTestCall(
+  services: ApiServices,
+  input: Parameters<CallRunner['startTestCall']>[0],
+): Promise<TestCallRecord> {
+  try {
+    return await services.runner.startTestCall(input);
+  } catch (error) {
+    if (error instanceof RunConflictError) throw new HttpError(409, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Same rule as apps/web/src/domain/default-campaign.ts: before the start,
+ * pre-event; after it, post-event. Kept here so one-click tests resolve on
+ * the server even when the client sends `{ kind: 'default' }`.
+ */
+function pickDefaultCampaign(
+  campaigns: CampaignRecord[],
+  event: Pick<EventRecord, 'startsAt'>,
+  now: Date,
+): CampaignRecord | undefined {
+  if (campaigns.length === 0) return undefined;
+  const preferred = now < new Date(event.startsAt) ? 'pre-event' : 'post-event';
+  return campaigns.find((campaign) => campaign.type === preferred) ?? campaigns[0];
+}
+
+/** Resolve number, prompt source, language, and fields for one test call. */
+async function resolveTestCall(
+  storage: Storage,
+  input: {
+    eventId: string | null;
+    to: string | null;
+    promptSource: TestCallPromptSourceInput;
+  },
+): Promise<{
+  eventId: string | null;
+  to: string;
+  promptSource: TestCallPromptSource;
+  language: Language;
+  fields: CaptureField[];
+}> {
+  const settings = await storage.getSettings();
+  const to = input.to ?? settings.testNumber;
+  if (!to) {
+    throw badRequest('set a test number in settings, or enter a number for this call');
+  }
+
+  const event = input.eventId ? await loadEvent(storage, input.eventId) : null;
+  const now = new Date();
+  const campaigns = event ? await storage.listCampaigns(event.id) : [];
+  const fallback = event ? pickDefaultCampaign(campaigns, event, now) : undefined;
+
+  if (input.promptSource.kind === 'default') {
+    if (!event) {
+      return { eventId: null, to, promptSource: { kind: 'builtin' }, language: 'en', fields: [] };
+    }
+    if (fallback) {
+      return {
+        eventId: event.id,
+        to,
+        promptSource: { kind: 'campaign', campaignId: fallback.id },
+        language: fallback.language,
+        fields: fallback.fields,
+      };
+    }
+    return {
+      eventId: event.id,
+      to,
+      promptSource: { kind: 'master', campaignType: 'pre-event' },
+      language: 'en',
+      fields: [],
+    };
+  }
+
+  if (input.promptSource.kind === 'master') {
+    return {
+      eventId: event?.id ?? null,
+      to,
+      promptSource: { kind: 'master', campaignType: input.promptSource.campaignType },
+      language: fallback?.language ?? 'en',
+      fields: [],
+    };
+  }
+
+  if (input.promptSource.kind === 'campaign') {
+    const campaign = await loadCampaign(storage, input.promptSource.campaignId);
+    if (event && campaign.eventId !== event.id) {
+      throw badRequest('campaign does not belong to this event');
+    }
+    return {
+      eventId: event?.id ?? null,
+      to,
+      promptSource: { kind: 'campaign', campaignId: campaign.id },
+      language: campaign.language,
+      fields: campaign.fields,
+    };
+  }
+
+  return {
+    eventId: event?.id ?? null,
+    to,
+    promptSource: { kind: 'custom', prompt: input.promptSource.prompt },
+    language: fallback?.language ?? 'en',
+    fields: [],
+  };
+}
+
 /** Drop queue entries whose guest is no longer on the list after an import. */
 async function pruneQueues(storage: Storage, eventId: string, guestIds: Set<string>): Promise<number> {
   let removed = 0;
@@ -148,6 +263,34 @@ const routes: Route[] = [
     const settings = { ...input, updatedAt: new Date().toISOString() };
     await storage.putSettings(settings);
     return { status: 200, body: { settings } };
+  }),
+
+  route('GET', '/test-calls', async ({ query, storage }) => {
+    const eventId = query.get('eventId');
+    if (eventId) await loadEvent(storage, eventId);
+    return {
+      status: 200,
+      body: { testCalls: await storage.listTestCalls(eventId) },
+    };
+  }),
+
+  /**
+   * Place a pipeline test. The only calling endpoint that may take a phone
+   * number from the request. Guest dials still read the number from storage.
+   */
+  route('POST', '/test-calls', async ({ body, storage, services }) => {
+    const calling = requireCalling(services);
+    const input = parseTestCallRequestInput(body);
+    const resolved = await resolveTestCall(storage, input);
+    const testCall = await startTestCall(calling, resolved);
+    return { status: 202, body: { testCall } };
+  }),
+
+  route('POST', '/test-calls/:testCallId/stop', async ({ params, services }) => {
+    const calling = requireCalling(services);
+    const testCall = await calling.runner.stopTestCall(params.testCallId!);
+    if (!testCall) throw notFound(`test call not found: ${params.testCallId}`);
+    return { status: 200, body: { testCall } };
   }),
 
   route('GET', '/events', async ({ storage }) => ({

@@ -30,6 +30,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 6. Write clear RSVP or attendance answers back to the event platform when supported.
 7. Compare the quality of different voice approaches (all-in-one voice agent, separate speech-to-text + LLM + text-to-speech, speech-to-speech models) on real calls.
 8. Keep reaching guests when one voice provider runs out of credits.
+9. ✓ Let the organizer hear the full pipeline, and try a prompt, before any guest is dialed.
 
 ## Features
 
@@ -87,6 +88,18 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ Do not leave voicemail messages in phase 1.
 - ✓ Extract the configured structured fields from the conversation. Use unknown when an answer is unclear.
 
+### Pipeline test calls
+
+Before a campaign dials guests, the organizer can place one test call through the same pipeline a guest would get (telephony, speech, and the model) and hear what an attendee would hear.
+
+- ✓ The deployment has one fixed test number, set by the organizer.
+- ✓ A global test link places one call to that number with one click. It uses a default prompt and no guest.
+- ✓ Each event has its own test link. One click calls the same fixed number with that event's prompt, language, voice, and event details, using a stand-in guest so the call matches what that event's attendees would receive.
+- ✓ From either link, the organizer can dial a number they enter instead of the fixed test number.
+- ✓ From either link, the organizer can use an existing prompt (a master prompt or a campaign prompt) or a new prompt written for this test. A new prompt applies to this test only and does not change the saved campaign prompt.
+- ✓ A test call does not dial the guest list, does not count as a guest attempt, and does not write back to the event platform. It is allowed outside the calling window and outside the pre-event and post-event timing rules.
+- ✓ The organizer can review that test attempt (outcome and transcript) apart from guest results and the event summary.
+
 ### Results and review
 
 - ✓ Store a structured result per attempt: call outcome and the campaign's captured fields.
@@ -97,7 +110,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 
 ## Non-goals
 
-- Selling, recruiting, or any call that is not for a specific event the organizer named.
+- Selling, recruiting, or any call that is not for a specific event the organizer named. Pipeline test calls are in scope: they check this product, and they are not a general dialer.
 - Registering people, selling tickets, or deciding the agenda. We integrate with the event platform; we do not replace it.
 - Prescribing call scripts, tone, or nudge wording in product requirements. The organizer owns that via the campaign prompt.
 - Inbound support, live help during the event, or a multi-day drip of reminder calls.
@@ -106,7 +119,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 
 ## Constraints
 
-- Call only guests on the loaded list who have a usable phone number and whom the organizer selected.
+- Call only guests on the loaded list who have a usable phone number and whom the organizer selected. A pipeline test call is the exception: it dials the fixed test number or a number the organizer entered for that test, and never the guest list.
 - Pre-event calls happen only before the event. Post-event calls happen only after it.
 - **Phase 1 resources:** use existing subscriptions where we have them. Telephony anchors on **Plivo**. TTS anchors on **ElevenLabs**. Event platform anchors on **Luma**. STT and LLM use whatever we already have access to that covers English, Hindi, and local Indian languages; pick specifics in design.
 - Treat phone numbers, call audio or transcripts, prompts, and platform or provider tokens as private to that organizer and event.
@@ -124,5 +137,8 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - When a guest's answer is clear and a connected platform supports it, RSVP or attendance is written back, or a sync failure is visible if write-back fails.
 - Phase 1 can complete an outbound call using the phase-1 resources above, including guest speech in English or Hindi.
 - ✓ The organizer can list per-guest results and an event summary without listening to the calls.
-- ✓ A number that was not on the loaded list is never called.
+- ✓ A guest call never dials a number that was not on the loaded list.
+- ✓ One click on the global test link calls the fixed test number through the same pipeline as a guest call.
+- ✓ One click on an event's test link calls that fixed number with the event's prompt and event details, so the answerer hears what that event's attendees would hear.
+- ✓ The organizer can send that test to a number they enter, using an existing prompt or a new prompt, without changing the saved campaign prompt or creating a guest attempt.
 - When the preferred voice provider has no credits, the next call still completes on another approach, and the attempt shows which approach was used.

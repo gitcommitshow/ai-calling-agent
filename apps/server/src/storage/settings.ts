@@ -30,6 +30,8 @@ export interface OrgSettings {
    * context. Everything else is withheld from the voice backend.
    */
   contextFields: ContextFieldId[];
+  /** Fixed number one-click pipeline tests dial. Null until the organizer sets it. */
+  testNumber: string | null;
   updatedAt: string;
 }
 
@@ -50,6 +52,7 @@ Keep the call under two minutes and stay polite if they want to end it.`,
     // Phone stays off by default: it is already known to telephony and is easy
     // to leak into transcripts if the model repeats it.
     contextFields: CONTEXT_FIELD_IDS.filter((id) => id !== 'guest.phone'),
+    testNumber: null,
     updatedAt: now,
   };
 }

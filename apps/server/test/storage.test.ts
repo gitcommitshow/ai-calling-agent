@@ -106,6 +106,7 @@ describe('JsonStore', () => {
     });
 
     const [attempt] = await store.listAttempts(eventId);
+    if (!attempt) throw new Error('expected a stored attempt');
     expect(attempt.status).to.equal('done');
     expect(attempt.outcome).to.equal('answered');
     expect(attempt.timeline).to.deep.equal([]);

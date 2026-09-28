@@ -25,6 +25,8 @@ export type ContextFieldId = (typeof CONTEXT_FIELD_IDS)[number];
 export interface OrgSettings {
   masterPrompts: Record<CampaignType, string>;
   contextFields: ContextFieldId[];
+  /** Fixed number one-click pipeline tests dial. Null until set. */
+  testNumber: string | null;
   updatedAt: string;
 }
 

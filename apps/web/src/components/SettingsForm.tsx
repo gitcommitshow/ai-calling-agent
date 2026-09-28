@@ -15,6 +15,7 @@ import {
   type OrgSettings,
 } from '../domain/settings';
 import type { CampaignType } from '../domain/types';
+import { normalizeIndianPhone } from '../domain/phone';
 
 interface Props {
   initial: OrgSettings;
@@ -24,6 +25,7 @@ export function SettingsForm({ initial }: Props) {
   const router = useRouter();
   const [preEvent, setPreEvent] = useState(initial.masterPrompts['pre-event']);
   const [postEvent, setPostEvent] = useState(initial.masterPrompts['post-event']);
+  const [testNumber, setTestNumber] = useState(initial.testNumber ?? '');
   const [contextFields, setContextFields] = useState<ContextFieldId[]>(initial.contextFields);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +43,12 @@ export function SettingsForm({ initial }: Props) {
     setMessage(null);
     setError(null);
     try {
+      let normalizedTestNumber: string | null = null;
+      if (testNumber.trim()) {
+        const parsed = normalizeIndianPhone(testNumber);
+        if (!parsed.phone) throw new Error(parsed.reason ?? 'invalid test number');
+        normalizedTestNumber = parsed.phone;
+      }
       const response = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
@@ -50,6 +58,7 @@ export function SettingsForm({ initial }: Props) {
             'post-event': postEvent,
           } satisfies Record<CampaignType, string>,
           contextFields,
+          testNumber: normalizedTestNumber,
         }),
       });
       const payload = (await response.json()) as { error?: string };
@@ -65,6 +74,27 @@ export function SettingsForm({ initial }: Props) {
 
   return (
     <form className="stack" onSubmit={save}>
+      <section className="card stack">
+        <div>
+          <h2>Pipeline test number</h2>
+          <p className="small muted">
+            One-click tests on the global test page and on each event dial this Indian mobile.
+            You can still type a different number on those pages for a single test.
+          </p>
+        </div>
+        <div>
+          <label htmlFor="test-number">Test number</label>
+          <input
+            id="test-number"
+            type="tel"
+            inputMode="tel"
+            placeholder="+91 98765 43210"
+            value={testNumber}
+            onChange={(changeEvent) => setTestNumber(changeEvent.target.value)}
+          />
+        </div>
+      </section>
+
       <section className="card stack">
         <div>
           <h2>Master prompts</h2>

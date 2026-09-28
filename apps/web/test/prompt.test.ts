@@ -68,6 +68,7 @@ function settings(overrides: Partial<OrgSettings> = {}): OrgSettings {
     ],
     updatedAt: event.createdAt,
     ...overrides,
+    testNumber: overrides.testNumber ?? null,
   };
 }
 

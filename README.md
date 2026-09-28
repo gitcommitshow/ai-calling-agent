@@ -51,7 +51,7 @@ npm run dev    # server http://127.0.0.1:4000, web http://localhost:3000
 
 A sample Luma export to import is at [apps/web/fixtures/luma-sample-guests.csv](apps/web/fixtures/luma-sample-guests.csv).
 
-Everything except calling works with no credentials. The server logs which variables are still missing on start, and `GET /health` reports the same list. To work on the run loop with no carrier and no provider spend, set `TELEPHONY_PROVIDER=fake` and `VOICE_PROVIDER=fake`: calls are simulated end to end and nothing is dialed. For real calls, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Everything except calling works with no credentials. The server logs which variables are still missing on start, and `GET /health` reports the same list. To work on the run loop with no carrier and no provider spend, set `TELEPHONY_PROVIDER=fake` and `VOICE_PROVIDER=fake`: calls are simulated end to end and nothing is dialed. For real calls, or to install on a Linux VM, see [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Docs
 

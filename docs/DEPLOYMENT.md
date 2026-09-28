@@ -1,21 +1,25 @@
 # Deployment
 
-**Still local-only.** Nothing is hosted and nothing is published. Phase 2 changes one thing: real calls need the telephony provider to reach this machine, so the server now needs a public https origin even when it runs locally.
-
-Keep this file current. A later agent session should be able to start or stop the system from it without guessing.
+How to run this system: locally, on any Linux VM, and the extra steps an exe.dev VM needs. This file does not pick a host. Keep it current so a later agent session can start or stop the system from it without guessing.
 
 ## What ships
 
-Nothing yet. Two private workspace apps run side by side:
+Two private workspace apps run side by side:
 
-- `apps/server`: Node HTTP API on `http://127.0.0.1:4000`, owns the data folder, the telephony callbacks, and the call audio socket.
-- `apps/web`: Next.js organizer UI on `http://localhost:3000`, reaches the server only from its own server-side code.
+- `apps/server`: Node HTTP API on port `4000`, owns the data folder, the telephony callbacks, and the call audio socket.
+- `apps/web`: Next.js organizer UI on port `3000`. It reaches the server only from its own server-side code.
+
+The browser never talks to the API. Next.js server-side code does, over `SERVER_URL`. Bind the API to loopback (`HOST=127.0.0.1`) so the JSON API is not on the network.
+
+Plivo has to reach this machine over public https for callbacks and the call audio WebSocket (`wss://.../telephony/plivo/stream/:attemptId`). Put a reverse proxy in front that forwards only those telephony paths (and `/health` if you want) to the API, and the organizer UI to Next.js. Do not proxy the rest of the API.
+
+The product has no login. Access control is whatever the host provides in front of the UI.
 
 The root package stays private and is never published.
 
 ## Environments
 
-Local only. One organizer, one deployment, many events. Access control comes from the host environment, not the product, so do not expose either port to a network beyond the tunnel described below.
+One organizer, one deployment, many events. Phase 1 tenancy is one organizer per process and data folder.
 
 ## Config and secrets
 
@@ -35,7 +39,7 @@ Calling, all server-side only:
 
 | Variable | Used by | Default |
 | --- | --- | --- |
-| `PUBLIC_BASE_URL` | telephony callbacks and audio socket | `http://HOST:PORT`, which is not enough for real calls |
+| `PUBLIC_BASE_URL` | telephony callbacks and audio socket | `http://HOST:PORT`, which is not enough for real calls. Use the public https origin with no trailing slash. |
 | `TELEPHONY_PROVIDER` | adapter choice: `plivo` or `fake` | `plivo` |
 | `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN` | Plivo REST and callback signatures | none |
 | `PLIVO_CALLER_ID` | the number calls come from | none |
@@ -91,19 +95,19 @@ TELEPHONY_PROVIDER=fake VOICE_PROVIDER=fake npm run dev
 
 The fake carrier answers immediately and the fake backend speaks a scripted exchange, so runs, attempts, timelines, and extraction all behave as they would on a real call. No number is dialed.
 
-### With real calls
+### With real calls on this machine
 
-Plivo has to reach the server, so it needs a public https origin. Locally that means a tunnel.
+Plivo has to reach the server, so it needs a public https origin. Locally that means a tunnel to the API port.
 
 1. Start a tunnel to the server port and copy the https URL it gives you.
-2. Set `PUBLIC_BASE_URL` to exactly that origin, with no trailing slash. The Plivo signature is verified against it, so a mismatch shows up as 403 on every callback.
+2. Set `PUBLIC_BASE_URL` to exactly that origin, with no trailing slash. The Plivo signature is `PUBLIC_BASE_URL + pathname + nonce`, so a mismatch shows up as 403 on every callback.
 3. Set the Plivo, ElevenLabs, and extraction variables from [Where to copy each value](#where-to-copy-each-value).
 4. Restart the server and check `GET /health` reports `calling.ready`.
-5. Place one call to your own number from a campaign page before running a queue.
+5. Place one call to your own number from a campaign page, or the pipeline test page, before running a queue.
 
-The audio socket is derived from the same origin (`wss://.../telephony/plivo/stream/:attemptId`), so a tunnel that does not forward WebSockets will connect the call and then carry no audio.
+The audio socket is derived from the same origin, so a tunnel that does not forward WebSockets will connect the call and then carry no audio.
 
-## Run it in production
+### Production build on this machine
 
 ```
 npm ci
@@ -112,28 +116,159 @@ npm run build
 npm start
 ```
 
-`npm run build` builds the web app. `npm start` loads `.env` when that file exists, then runs the API server and `next start` for the web app. Shell variables win over `.env`. The server runs from TypeScript through `tsx`, which `npm ci` installs. The site listens on `WEB_PORT` (default 3000). Set `WEB_PORT` to a free port when another program is using 3000, and point the host proxy at that port. `PORT` stays the API on 4000, so the two never share one variable. Ctrl+C stops both processes.
+`npm start` loads `.env` when that file exists, then runs the API and `next start`. Shell variables win over `.env`. The site listens on `WEB_PORT` (default 3000). `PORT` stays the API on 4000. Ctrl+C stops both.
 
-There is no host yet. Record it here before anything is actually deployed.
+## Linux VM
+
+Need Node 24 (`engines` in the root `package.json`). On Debian or Ubuntu, if `node -v` is missing or below 24:
+
+```
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
+sudo apt-get install -y nodejs
+node -v
+```
+
+Clone the repo, then from the clone directory:
+
+```
+npm ci
+cp .env.example .env
+chmod 600 .env
+```
+
+Edit `.env`:
+
+```
+HOST=127.0.0.1
+PORT=4000
+WEB_PORT=3000
+SERVER_URL=http://127.0.0.1:4000
+PUBLIC_BASE_URL=https://your-public-hostname
+```
+
+Set Plivo, ElevenLabs, and extraction from [Where to copy each value](#where-to-copy-each-value). `PUBLIC_BASE_URL` is the https origin Plivo is told to call: no trailing slash, no extra port unless that port is part of the public URL. Do not commit `.env`.
+
+Build and keep both apps running across disconnects and reboots (systemd is one way; any supervisor that restarts `npm start` is fine):
+
+```
+npm run build
+sudo tee /etc/systemd/system/calling-agent.service <<EOF
+[Unit]
+Description=AI calling agent
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$(pwd)
+EnvironmentFile=$(pwd)/.env
+ExecStart=$(which npm) start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload
+sudo systemctl enable --now calling-agent
+```
+
+Stop with `sudo systemctl stop calling-agent`. Do not restart mid-run. Live attempts are closed as interrupted.
+
+### Reverse proxy
+
+Terminate TLS at nginx (or equivalent) on the public https port. Forward the organizer UI to Next.js and only telephony (plus optional health) to the API. WebSocket upgrade is required on `/telephony/` or calls ring with no audio.
+
+```
+server {
+    listen 443 ssl;
+    server_name your-public-hostname;
+
+    # TLS certificates: use whatever this host already uses (certbot, Caddy, etc.)
+
+    location /telephony/ {
+        proxy_pass http://127.0.0.1:4000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:4000;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Put host access control in front of `location /` (VPN, firewall, reverse-proxy auth). Leave `/telephony/` reachable from the internet so Plivo can POST and open the audio socket without logging in.
+
+Check `https://your-public-hostname/health` for `calling.ready`. Then open the UI, set a test number in Settings, and place a pipeline test before any guest queue.
+
+### After a code change
+
+```
+git pull
+npm ci
+npm run build
+sudo systemctl restart calling-agent
+```
+
+## exe.dev
+
+Same as [Linux VM](#linux-vm), with these host facts:
+
+- The VM is reachable over SSH as `<vm>.exe.xyz`. Create one with `ssh exe.dev new --name <vm>`, then `ssh <vm>.exe.xyz`.
+- The [GitHub integration](https://exe.dev/docs/integrations/github) avoids a personal access token on every VM when cloning.
+- The default exeuntu image may not include Node 24. Install it with the commands in [Linux VM](#linux-vm).
+- exe.dev terminates TLS and proxies `https://<vm>.exe.xyz/` to one port on the VM (default `8000`). Ports `3000`-`9999` are also reachable as `https://<vm>.exe.xyz:<port>/`, but only for people with access to the VM. Only one port can be marked public (`share set-public`).
+
+Plivo cannot log into exe.dev, so the public origin must be telephony-only. Keep the organizer UI on the private port so exe.dev login stays the access control.
+
+1. Listen nginx on `127.0.0.1:8000` with only `/telephony/` and `/health` proxied to the API (same `location` blocks as above, `listen 127.0.0.1:8000`, and `location / { return 404; }`). Do not put Next.js on this public port.
+
+2. From your laptop:
+
+```
+ssh exe.dev share port <vm> 8000
+ssh exe.dev share set-public <vm>
+```
+
+3. Set `PUBLIC_BASE_URL=https://<vm>.exe.xyz` with no trailing slash and no `:8000`.
+
+4. Leave `WEB_PORT=3000` private. The organizer UI is `https://<vm>.exe.xyz:3000` for anyone [shared on the VM](https://exe.dev/docs/features/sharing).
+
+5. Health check: `curl -sS https://<vm>.exe.xyz/health`. Then open the UI on port 3000 and run a pipeline test.
 
 ## Release path
 
-None yet. Release-please still tags versions from conventional commits on `main`; `publish.yml` stays inactive because no workspace is publishable. The process, once a host exists, is the production run above.
+Release-please still tags versions from conventional commits on `main`. `publish.yml` stays inactive because no workspace is publishable. Shipping to a VM is pull, `npm ci`, `npm run build`, and restart of the process that runs `npm start`.
 
 ## Rollback
 
-Stop both processes. Data lives in plain JSON files under `DATA_DIR`, one folder per event, so restoring is a file copy. Keep a copy of that folder before an upgrade that changes record shapes.
+Stop the process (`sudo systemctl stop calling-agent` if you used the unit above). Data lives in plain JSON files under `DATA_DIR`, one folder per event, so restoring is a file copy. Keep a copy of that folder before an upgrade that changes record shapes. Then check out the previous git revision, `npm ci`, `npm run build`, and start again.
 
 ## Health and logs
 
-- Server: `GET /health` returns `{"ok":true,"calling":{"ready":...,"missing":[...]}}`. On start it logs its port, data folder, chosen adapters, and anything missing.
+- Server: `GET /health` (on the public origin, if you proxied it) returns `{"ok":true,"calling":{"ready":...,"missing":[...]}}`. On start it logs its port, data folder, chosen adapters, and anything missing. With the systemd unit: `journalctl -u calling-agent -f`.
 - The runner logs one line per attempt with its outcome, and one line per skipped guest with the reason.
-- Web: the Next.js process logs to its terminal. If a page shows "cannot reach the server", the server process is down or `SERVER_URL` is wrong.
+- Web: Next.js logs go to the same process. If a page shows "cannot reach the server", the API process is down or `SERVER_URL` is not the loopback API URL.
 
 ## Do not
 
 - Do not run two server processes against one data folder. The design assumes a single writer (DESIGN D4), and both would try to run calls.
 - Do not commit `data/` or a real guest CSV.
-- Do not expose the server port directly to the internet. Only the telephony callback paths need to be reachable, and only over the tunnel or host origin in `PUBLIC_BASE_URL`.
-- Do not set `PLIVO_VERIFY_SIGNATURE=false` anywhere reachable from the internet. It exists for local debugging of callback bodies.
+- Do not bind the API to a public interface. The full JSON API would then be on the internet.
+- Do not reverse-proxy the JSON API to the public origin. Only `/telephony/` (and `/health` if you want) should reach the API from outside.
+- Do not set `PLIVO_VERIFY_SIGNATURE=false` on a public origin. It exists for local debugging of callback bodies.
 - Do not restart the server mid-run expecting it to carry on. Live attempts are closed as interrupted and the organizer starts again.

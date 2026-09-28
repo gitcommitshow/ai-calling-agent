@@ -76,6 +76,9 @@ export default async function EventsPage() {
                   <Link className="small" href={`/events/${event.id}`}>
                     Guests and queue
                   </Link>
+                  <Link className="small" href={`/events/${event.id}/test`}>
+                    Test call
+                  </Link>
                   <Link className="small" href={`/events/${event.id}/results`}>
                     Results
                   </Link>

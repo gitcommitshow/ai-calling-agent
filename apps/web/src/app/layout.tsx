@@ -37,6 +37,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <strong>
               <Link href="/">Calling agent</Link>
             </strong>
+            <Link href="/test" className="small muted">
+              Test
+            </Link>
             <Link href="/settings" className="small muted">
               Settings
             </Link>

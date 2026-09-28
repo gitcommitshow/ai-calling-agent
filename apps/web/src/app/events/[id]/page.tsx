@@ -51,6 +51,9 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
               </li>
             ))}
             <li>
+              <Link href={`/events/${event.id}/test`}>Test call</Link>
+            </li>
+            <li>
               <Link href={`/events/${event.id}/results`}>Results</Link>
             </li>
           </ul>

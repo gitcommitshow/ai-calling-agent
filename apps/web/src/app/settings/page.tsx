@@ -17,11 +17,13 @@ export default async function SettingsPage() {
         <div>
           <p className="small muted">
             <Link href="/">Events</Link>
+            {' · '}
+            <Link href="/test">Pipeline test</Link>
           </p>
           <h1>Settings</h1>
           <p className="muted small">
-            Shared across every event. Last saved{' '}
-            {new Date(settings.updatedAt).toLocaleString('en-IN')}.
+            Shared across every event, including the fixed number one-click tests dial. Last
+            saved {new Date(settings.updatedAt).toLocaleString('en-IN')}.
           </p>
         </div>
         <SettingsForm initial={settings} />
