@@ -1,0 +1,6 @@
+{
+  "node-option": ["import=tsx"],
+  "extension": ["ts"],
+  "timeout": 20000,
+  "ignore": ["test/**/*.e2e.test.ts"]
+}

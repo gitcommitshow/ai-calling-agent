@@ -1,4 +1,8 @@
 node_modules/
 dist/
+.next/
+next-env.d.ts
+data/
 .DS_Store
 .env
+tsconfig.tsbuildinfo

@@ -1,0 +1,22 @@
+{
+  "name": "@ai-calling-agent/server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "JSON HTTP API, telephony, voice, and extraction for the calling agent",
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file-if-exists=../../.env --import tsx --watch src/index.ts",
+    "start": "node --env-file-if-exists=../../.env --import tsx src/index.ts",
+    "seed": "node --env-file-if-exists=../../.env --import tsx src/seed.ts",
+    "test": "mocha --config ../../.mocharc.json \"test/**/*.test.ts\"",
+    "test:e2e": "mocha --config ../../.mocharc.e2e.json \"test/**/*.e2e.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "resilient-llm": "^1.8.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.0"
+  }
+}
