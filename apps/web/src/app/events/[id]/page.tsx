@@ -14,6 +14,7 @@ import {
   listAttempts,
   listCampaigns,
   listGuests,
+  listRuns,
   ServerApiError,
 } from '../../../lib/server-api';
 import { formatInZone } from '../../../lib/time';
@@ -24,11 +25,12 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
   const { id } = await params;
 
   try {
-    const [event, guests, campaigns, attempts] = await Promise.all([
+    const [event, guests, campaigns, attempts, runs] = await Promise.all([
       getEvent(id),
       listGuests(id),
       listCampaigns(id),
       listAttempts(id),
+      listRuns(id),
     ]);
 
     const openQuestionCount = attempts.reduce(
@@ -98,6 +100,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
             guests={guests}
             campaigns={campaigns}
             attempts={attempts}
+            runs={runs}
             nowIso={new Date().toISOString()}
           />
         </section>

@@ -38,6 +38,12 @@
   --danger: #8a4b3c;
   --danger-wash: rgba(138, 75, 60, 0.07);
 
+  /* Queue bars: warm means a person must start it, green means it will call. */
+  --queue-pending: #f6e7d4;
+  --queue-pending-ink: #6b3e24;
+  --queue-armed: #e3f0e4;
+  --queue-armed-ink: #1e5c34;
+
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
@@ -75,6 +81,11 @@
 
     --danger: #d8a99c;
     --danger-wash: rgba(216, 169, 156, 0.1);
+
+    --queue-pending: #3d2e24;
+    --queue-pending-ink: #f3d5be;
+    --queue-armed: #24352a;
+    --queue-armed-ink: #c9e6d0;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow: 0 2px 10px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -707,6 +718,88 @@ th {
   margin-left: auto;
 }
 
+/* One full-width bar per queue, inside the call queue section. */
+.queue-bars {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.queue-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.15rem var(--space-3);
+  border-radius: var(--radius);
+}
+
+.queue-bar.pending {
+  background: var(--queue-pending);
+  color: var(--queue-pending-ink);
+}
+
+.queue-bar.armed,
+.queue-bar.live {
+  background: var(--queue-armed);
+  color: var(--queue-armed-ink);
+}
+
+.queue-bar-name {
+  min-width: 0;
+  flex: 0 1 16rem;
+  color: inherit;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.queue-bar-state {
+  min-width: 0;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.queue-bar input[type='datetime-local'] {
+  width: 11.5rem;
+  height: 2rem;
+  padding: 0 var(--space-2);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.queue-bar button.icon-action {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  justify-content: center;
+  flex: 0 0 auto;
+}
+
+.queue-bar button.stop-action {
+  height: 2rem;
+  padding: 0 var(--space-3);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.queue-bar-error {
+  margin: var(--space-1) 0 0;
+}
+
 .transcript {
   font-family: var(--font-mono);
   font-size: 0.875rem;
@@ -801,6 +894,23 @@ details[open] > summary {
   .toolbar-split button {
     flex: 1 1 auto;
     justify-content: center;
+  }
+
+  .queue-bar {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .queue-bar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .queue-bar input[type='datetime-local'] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
   }
 }
 

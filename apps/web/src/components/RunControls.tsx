@@ -33,7 +33,6 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
   const router = useRouter();
   const [run, setRun] = useState<Run | null>(initialRun);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
-  const [startsAt, setStartsAt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const timeZone = campaign.callingWindow.timezone;
@@ -103,21 +102,25 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
     }
   }
 
-  /** Save a start time. The queue is dialed then, unless this is cancelled first. */
-  async function schedule(formEvent: FormEvent) {
+  /**
+   * Save a start time taken from the field itself. A controlled value stayed
+   * empty when the picker showed a time, which left Schedule disabled.
+   */
+  async function schedule(formEvent: FormEvent<HTMLFormElement>) {
     formEvent.preventDefault();
+    const raw = String(new FormData(formEvent.currentTarget).get('startsAt') ?? '').trim();
     setBusy(true);
     setError(null);
     try {
       const response = await fetch(`/api/campaigns/${campaign.id}/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ startsAt: zonedInputToIso(startsAt, timeZone) }),
+        body: JSON.stringify({ startsAt: zonedInputToIso(raw, timeZone) }),
       });
       const payload = (await response.json()) as { run?: Run; error?: string };
       if (!response.ok || !payload.run) throw new Error(payload.error ?? 'could not schedule the run');
       setRun(payload.run);
-      setStartsAt('');
+      formEvent.currentTarget.reset();
     } catch (scheduleError) {
       setError((scheduleError as Error).message);
     } finally {
@@ -151,7 +154,7 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
               disabled={busy}
               onClick={() => send(`/api/runs/${run.id}/stop`, 'could not cancel the schedule')}
             >
-              <Icon name="ban" /> Cancel
+              <Icon name="phoneOff" /> Stop
             </button>
           ) : (
             <button
@@ -184,14 +187,13 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
               <label htmlFor="schedule-start">Or start at ({timeZone})</label>
               <input
                 id="schedule-start"
+                name="startsAt"
                 type="datetime-local"
-                value={startsAt}
                 required
                 min={isoToZonedInput(new Date().toISOString(), timeZone)}
-                onChange={(changeEvent) => setStartsAt(changeEvent.target.value)}
               />
             </div>
-            <button type="submit" className="secondary" disabled={busy || !startsAt}>
+            <button type="submit" disabled={busy}>
               <Icon name="clock" /> {busy ? 'Scheduling...' : 'Schedule'}
             </button>
           </form>

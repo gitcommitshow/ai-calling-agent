@@ -9,6 +9,7 @@
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
+import { CampaignQuickCalls } from './CampaignQuickCalls';
 import { Icon } from './Icon';
 import { APPROVAL_STATUS_ICONS } from './status-icons';
 import { defaultCampaign } from '../domain/default-campaign';
@@ -49,10 +50,11 @@ interface Props {
   guests: Guest[];
   campaigns: Campaign[];
   attempts: Attempt[];
+  runs: Run[];
   nowIso: string;
 }
 
-export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props) {
+export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }: Props) {
   const router = useRouter();
   const initialCampaign = defaultCampaign(campaigns, event, new Date(nowIso));
   const [campaignId, setCampaignId] = useState(initialCampaign?.id ?? '');
@@ -412,6 +414,7 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
 
   return (
     <div className="stack">
+      <CampaignQuickCalls eventId={event.id} campaigns={knownCampaigns} runs={runs} />
       <div className="grid">
         <div>
           <label htmlFor="campaign">Queue for campaign</label>
