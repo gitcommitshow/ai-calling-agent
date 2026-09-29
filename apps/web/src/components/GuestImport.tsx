@@ -9,6 +9,7 @@ import { useState, type ChangeEvent } from 'react';
 import { Icon } from './Icon';
 import { APPROVAL_STATUS_ICONS } from './status-icons';
 import { parseLumaCsv, type LumaImportResult } from '../domain/luma-csv';
+import { formatIndianPhone } from '../domain/phone';
 import { APPROVAL_STATUSES, APPROVAL_STATUS_LABELS, type ApprovalStatus } from '../domain/types';
 
 interface Props {
@@ -29,11 +30,13 @@ export function GuestImport({ eventId, guestCount }: Props) {
   const [preview, setPreview] = useState<LumaImportResult | null>(null);
   const [fileName, setFileName] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   async function onFile(changeEvent: ChangeEvent<HTMLInputElement>) {
     const file = changeEvent.target.files?.[0];
     setError(null);
+    setWarning(null);
     setPreview(null);
     if (!file) return;
 
@@ -49,6 +52,7 @@ export function GuestImport({ eventId, guestCount }: Props) {
     if (!preview) return;
     setBusy(true);
     setError(null);
+    setWarning(null);
     try {
       const response = await fetch(`/api/events/${eventId}/guests/import`, {
         method: 'POST',
@@ -58,9 +62,23 @@ export function GuestImport({ eventId, guestCount }: Props) {
           skippedWithoutPhone: preview.skippedWithoutPhone,
         }),
       });
-      const payload = (await response.json()) as { error?: string };
+      const payload = (await response.json()) as {
+        error?: string;
+        skippedExistingPhones?: { phone: string; existingName: string; incomingName: string }[];
+      };
       if (!response.ok) throw new Error(payload.error ?? 'import failed');
 
+      const skipped = payload.skippedExistingPhones ?? [];
+      setWarning(
+        skipped.length === 0
+          ? null
+          : skipped
+              .map(
+                (row) =>
+                  `${row.incomingName} was not added. ${row.existingName} already has ${formatIndianPhone(row.phone)}.`,
+              )
+              .join(' '),
+      );
       setPreview(null);
       setFileName('');
       router.refresh();
@@ -79,14 +97,20 @@ export function GuestImport({ eventId, guestCount }: Props) {
         </label>
         <input id="csv" type="file" accept=".csv,text/csv" onChange={onFile} />
         <p className="small muted">
-          Importing replaces the current guest list ({guestCount} guests). Guests without a callable
-          Indian number are skipped.
+          Importing replaces imported guests. Guests you added by hand stay. There are {guestCount}{' '}
+          guests on the list now. A row whose phone is already on the list is not added.
+          Guests with no phone number are skipped. A number with no country code is treated as India when it is a 10-digit mobile.
         </p>
       </div>
 
       {error ? (
         <p className="notice error small">
           <Icon name="alert" /> {error}
+        </p>
+      ) : null}
+      {warning ? (
+        <p className="notice small">
+          <Icon name="alert" /> {warning}
         </p>
       ) : null}
 

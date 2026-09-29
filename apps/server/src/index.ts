@@ -23,7 +23,9 @@ const server = createServer(createRequestListener(storage, services));
 server.on('upgrade', createUpgradeListener(services));
 
 // A restart kills every live call, so nothing may still look in flight.
+// A start the organizer already set is put back on the clock.
 await runner.reconcileOnStartup();
+await runner.restoreSchedules();
 
 server.on('error', (error: NodeJS.ErrnoException) => {
   if (error.code === 'EADDRINUSE') {

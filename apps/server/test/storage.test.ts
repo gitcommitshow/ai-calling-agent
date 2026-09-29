@@ -17,6 +17,8 @@ function sampleEvent(id = 'launch-party-1234abcd'): EventRecord {
     startsAt: '2026-10-01T12:30:00.000Z',
     endsAt: '2026-10-01T16:30:00.000Z',
     timezone: 'Asia/Kolkata',
+    brief: { about: '', where: '', notes: '' },
+    sourceUrl: null,
     lastImport: null,
     createdAt: '2026-09-27T10:00:00.000Z',
     updatedAt: '2026-09-27T10:00:00.000Z',
@@ -111,6 +113,7 @@ describe('JsonStore', () => {
     expect(attempt.outcome).to.equal('answered');
     expect(attempt.timeline).to.deep.equal([]);
     expect(attempt.runId).to.equal(null);
+    expect(attempt.openQuestions).to.deep.equal([]);
     expect(await store.getAttempt(eventId, attempt.id)).to.deep.equal(attempt);
   });
 });

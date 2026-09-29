@@ -7,6 +7,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { AttemptTimeline } from '../../../../components/AttemptTimeline';
 import { Icon } from '../../../../components/Icon';
+import { OpenQuestions } from '../../../../components/OpenQuestions';
 import { LiveRefresh } from '../../../../components/LiveRefresh';
 import { CALL_OUTCOME_ICONS } from '../../../../components/status-icons';
 import {
@@ -43,6 +44,20 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
     const outcomesWithCounts = (Object.entries(summary.outcomes) as [CallOutcome, number][]).filter(
       ([, count]) => count > 0,
     );
+    const openRows = attempts.flatMap((attempt) => {
+      const guest = guestById.get(attempt.guestId);
+      return (attempt.openQuestions ?? [])
+        .filter((question) => question.status === 'open')
+        .map((question) => ({
+          questionId: question.id,
+          text: question.text,
+          attemptId: attempt.id,
+          guestId: attempt.guestId,
+          guestName: guest?.name ?? attempt.guestId,
+          campaignId: attempt.campaignId,
+          campaignName: campaignName.get(attempt.campaignId) ?? attempt.campaignId,
+        }));
+    });
 
     return (
       <div className="stack">
@@ -71,6 +86,8 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
             ))}
           </div>
         </div>
+
+        <OpenQuestions eventId={event.id} rows={openRows} />
 
         <section className="card">
           <h2>By campaign</h2>
@@ -128,8 +145,12 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
                 const captured = Object.entries(attempt.capturedFields);
                 const live = attempt.status !== 'done';
 
+                const resolved = (attempt.openQuestions ?? []).filter(
+                  (question) => question.status === 'resolved',
+                );
+
                 return (
-                  <article key={attempt.id} className="entity-card">
+                  <article key={attempt.id} id={`attempt-${attempt.id}`} className="entity-card">
                     <div className="entity-card-head">
                       <div>
                         <h3>{guest?.name ?? attempt.guestId}</h3>
@@ -169,6 +190,16 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
                         </span>
                       </span>
                     </div>
+
+                    {resolved.length > 0 ? (
+                      <div className="toolbar">
+                        {resolved.map((question) => (
+                          <span key={question.id} className="chip">
+                            <Icon name="check" /> Answered: {question.text}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
 
                     {captured.length > 0 ? (
                       <div className="toolbar">

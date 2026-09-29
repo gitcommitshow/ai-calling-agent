@@ -41,12 +41,12 @@ export function defaultOrgSettings(now = new Date().toISOString()): OrgSettings 
     masterPrompts: {
       'pre-event': `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}.
 
-Introduce yourself as an assistant calling about the event, and say it starts on {{event.startsAt}}.
-Ask whether they plan to attend. If they are unsure, ask what would help them decide.
+Introduce yourself in one sentence and say it starts on {{event.startsAt}}. Share the facts from the event brief when they help.
+Ask once whether they plan to attend. If they ask a question, answer it from that brief.
 Keep the call under two minutes and stay polite if they want to end it.`,
       'post-event': `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}, which ended on {{event.endsAt}}.
 
-Thank them for their interest, confirm whether they made it to the event, and ask for one piece of feedback.
+Thank them, confirm whether they made it, and ask for one piece of feedback. If they ask about the event, answer from the event brief.
 Keep the call under two minutes and stay polite if they want to end it.`,
     },
     // Phone stays off by default: it is already known to telephony and is easy

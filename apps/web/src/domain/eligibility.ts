@@ -4,6 +4,7 @@
  * dial (apps/server/src/runner/guardrails.ts), because a saved queue can go
  * stale between pressing start and reaching the guest.
  */
+import { canCallPhone } from './phone';
 import type { Campaign, Event, Guest } from './types';
 
 export type Eligibility = { eligible: true } | { eligible: false; reason: string };
@@ -14,6 +15,8 @@ export interface EligibilityContext {
   /** Attempts already made per guest for this campaign, for the retry cap. */
   attemptsByGuest: Record<string, number>;
   now: Date;
+  /** Set only for an organizer follow-up on an open question. */
+  waiveRetryCap?: boolean;
 }
 
 /** Local wall-clock time in the window's timezone, as HH:MM. */
@@ -36,6 +39,9 @@ export function checkEligibility(guest: Guest, ctx: EligibilityContext): Eligibi
   const { event, campaign, attemptsByGuest, now } = ctx;
 
   if (!guest.phone) return { eligible: false, reason: 'no usable phone number' };
+  if (!canCallPhone(guest.phone)) {
+    return { eligible: false, reason: 'calling outside India is not available yet' };
+  }
   if (!campaign.queue.includes(guest.id)) {
     return { eligible: false, reason: 'not in the campaign queue' };
   }
@@ -50,7 +56,7 @@ export function checkEligibility(guest: Guest, ctx: EligibilityContext): Eligibi
   }
 
   const attempts = attemptsByGuest[guest.id] ?? 0;
-  if (attempts >= campaign.retryCap) {
+  if (!ctx.waiveRetryCap && attempts >= campaign.retryCap) {
     return { eligible: false, reason: `retry cap reached (${attempts}/${campaign.retryCap})` };
   }
 

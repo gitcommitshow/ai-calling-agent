@@ -23,6 +23,28 @@ export function isWithinCallingWindow(now: Date, window: CampaignRecord['calling
   return time >= window.start && time < window.end;
 }
 
+/**
+ * Why a chosen start time cannot dial this campaign. Null when that instant
+ * is inside the pre-event or post-event rule and the daily calling window.
+ */
+export function scheduleBlockReason(
+  event: EventRecord,
+  campaign: CampaignRecord,
+  at: Date,
+): string | null {
+  if (campaign.type === 'pre-event' && at >= new Date(event.startsAt)) {
+    return 'that time is after the event starts';
+  }
+  if (campaign.type === 'post-event' && at <= new Date(event.endsAt)) {
+    return 'that time is before the event ends';
+  }
+  if (!isWithinCallingWindow(at, campaign.callingWindow)) {
+    const { start, end, timezone } = campaign.callingWindow;
+    return `that time is outside the calling window (${start}-${end} ${timezone})`;
+  }
+  return null;
+}
+
 /** Attempts already made per guest for one campaign, for the retry cap. */
 export function countAttemptsByGuest(
   attempts: AttemptRecord[],
@@ -41,6 +63,8 @@ export interface GuardrailContext {
   campaign: CampaignRecord;
   attemptsByGuest: Record<string, number>;
   now: Date;
+  /** Set only for an organizer follow-up on an open question. */
+  waiveRetryCap?: boolean;
 }
 
 /** One guest against one campaign. The first failing rule is the reason stored. */
@@ -48,6 +72,10 @@ export function checkGuardrails(guest: GuestRecord, ctx: GuardrailContext): Guar
   const { event, campaign, attemptsByGuest, now } = ctx;
 
   if (!guest.phone) return { ok: false, reason: 'no usable phone number' };
+  // Same rule as the guest list: other countries are stored, not dialed yet.
+  if (!/^\+91[6-9]\d{9}$/.test(guest.phone)) {
+    return { ok: false, reason: 'calling outside India is not available yet' };
+  }
   if (!campaign.queue.includes(guest.id)) {
     return { ok: false, reason: 'not in the campaign queue' };
   }
@@ -60,7 +88,7 @@ export function checkGuardrails(guest: GuestRecord, ctx: GuardrailContext): Guar
   }
 
   const attempts = attemptsByGuest[guest.id] ?? 0;
-  if (attempts >= campaign.retryCap) {
+  if (!ctx.waiveRetryCap && attempts >= campaign.retryCap) {
     return { ok: false, reason: `retry cap reached (${attempts}/${campaign.retryCap})` };
   }
 

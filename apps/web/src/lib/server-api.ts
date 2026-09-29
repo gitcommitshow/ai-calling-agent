@@ -61,18 +61,51 @@ export async function getEvent(eventId: string): Promise<Event> {
   return (await request<{ event: Event }>(`/events/${eventId}`)).event;
 }
 
+/** Create an event from a Luma page, or return the one already stored for that link. */
+export async function importLumaEvent(url: string): Promise<{ event: Event; created: boolean }> {
+  return request<{ event: Event; created: boolean }>('/events/from-luma', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+}
+
+/** Re-read the saved Luma page and replace the name, schedule, and description. */
+export async function refreshLumaEvent(eventId: string): Promise<Event> {
+  return (await request<{ event: Event }>(`/events/${eventId}/refresh-luma`, { method: 'POST' })).event;
+}
+
 export async function createEvent(input: {
   name: string;
   startsAt: string;
   endsAt: string;
   timezone: string;
+  brief: Event['brief'];
 }): Promise<Event> {
   const body = JSON.stringify(input);
   return (await request<{ event: Event }>('/events', { method: 'POST', body })).event;
 }
 
+/** Add one guest the organizer typed in. The server refuses a phone already on the list. */
+export async function addGuest(
+  eventId: string,
+  input: { name: string; phone: string },
+): Promise<Guest> {
+  return (
+    await request<{ guest: Guest }>(`/events/${eventId}/guests`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  ).guest;
+}
+
 export async function listGuests(eventId: string): Promise<Guest[]> {
   return (await request<{ guests: Guest[] }>(`/events/${eventId}/guests`)).guests;
+}
+
+export interface SkippedPhone {
+  phone: string;
+  existingName: string;
+  incomingName: string;
 }
 
 export interface ImportResult {
@@ -80,6 +113,7 @@ export interface ImportResult {
   skippedWithoutPhone: number;
   duplicateRowsMerged: number;
   removedFromQueues: number;
+  skippedExistingPhones: SkippedPhone[];
 }
 
 export async function importGuests(
@@ -124,22 +158,68 @@ export async function updateCampaign(
   ).campaign;
 }
 
+/** Replace the event details, including the brief the agent may say. */
+export async function updateEvent(
+  eventId: string,
+  input: {
+    name: string;
+    startsAt: string;
+    endsAt: string;
+    timezone: string;
+    brief: Event['brief'];
+  },
+): Promise<Event> {
+  return (
+    await request<{ event: Event }>(`/events/${eventId}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    })
+  ).event;
+}
+
 /**
  * Call one guest. The server reads the number from storage by id, so only a
- * guest on the list can be dialed. It answers with the run doing the calling.
+ * guest on the list can be dialed. An open question id makes this a follow-up
+ * that skips the retry cap. It answers with the run doing the calling.
  */
-export async function callGuest(campaignId: string, guestId: string): Promise<Run> {
+export async function callGuest(
+  campaignId: string,
+  guestId: string,
+  openQuestionId?: string,
+): Promise<Run> {
   return (
     await request<{ run: Run }>(`/campaigns/${campaignId}/calls`, {
       method: 'POST',
-      body: JSON.stringify({ guestId }),
+      body: JSON.stringify(openQuestionId ? { guestId, openQuestionId } : { guestId }),
     })
   ).run;
 }
 
-/** Start the campaign's saved queue. The server allows one run at a time. */
-export async function startRun(campaignId: string): Promise<Run> {
-  return (await request<{ run: Run }>(`/campaigns/${campaignId}/runs`, { method: 'POST' })).run;
+/** Mark one saved question resolved. The question stays on the attempt. */
+export async function resolveOpenQuestion(
+  eventId: string,
+  attemptId: string,
+  questionId: string,
+): Promise<Attempt> {
+  return (
+    await request<{ attempt: Attempt }>(
+      `/events/${eventId}/attempts/${attemptId}/questions/${questionId}/resolve`,
+      { method: 'POST' },
+    )
+  ).attempt;
+}
+
+/**
+ * Start the campaign's saved queue. Pass `startsAt` to dial later instead of
+ * now. The server allows one live call at a time, and one scheduled start.
+ */
+export async function startRun(campaignId: string, startsAt?: string): Promise<Run> {
+  return (
+    await request<{ run: Run }>(`/campaigns/${campaignId}/runs`, {
+      method: 'POST',
+      body: JSON.stringify(startsAt ? { startsAt } : {}),
+    })
+  ).run;
 }
 
 export async function getRun(runId: string): Promise<{ run: Run; attempts: Attempt[] }> {

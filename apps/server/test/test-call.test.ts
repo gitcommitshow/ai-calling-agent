@@ -27,6 +27,8 @@ const startedEvent: EventRecord = {
   startsAt: '2026-09-01T12:30:00.000Z',
   endsAt: '2026-12-01T16:30:00.000Z',
   timezone: 'Asia/Kolkata',
+  brief: { about: '', where: '', notes: '' },
+  sourceUrl: null,
   lastImport: null,
   createdAt: '2026-09-27T10:00:00.000Z',
   updatedAt: '2026-09-27T10:00:00.000Z',
@@ -162,7 +164,7 @@ describe('pipeline test calls', () => {
     store = new JsonStore(dataDir);
     telephony = new FakeCarrier();
     voice = new FakeVoice((attemptId) => telephony.endCall(attemptId));
-    extract = sinon.stub().resolves({ will_attend: 'yes' });
+    extract = sinon.stub().resolves({ fields: { will_attend: 'yes' }, openQuestions: [] });
     runner = new CallRunner({
       storage: store,
       telephony,

@@ -27,6 +27,7 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
   const router = useRouter();
   const [name, setName] = useState(campaign.name);
   const [useMasterPrompt, setUseMasterPrompt] = useState(campaign.useMasterPrompt);
+  const [purpose, setPurpose] = useState(campaign.purpose ?? '');
   const [prompt, setPrompt] = useState(campaign.prompt);
   const [language, setLanguage] = useState<Language>(campaign.language);
   const [fields, setFields] = useState<CaptureField[]>(campaign.fields);
@@ -41,11 +42,11 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
     () =>
       assemblePrompt({
         event,
-        campaign: { ...campaign, prompt, useMasterPrompt, language, fields },
+        campaign: { ...campaign, prompt, purpose, useMasterPrompt, language, fields },
         guest: sampleGuest,
         settings,
       }),
-    [campaign, event, fields, language, prompt, sampleGuest, settings, useMasterPrompt],
+    [campaign, event, fields, language, prompt, purpose, sampleGuest, settings, useMasterPrompt],
   );
 
   function updateField(index: number, patch: Partial<CaptureField>) {
@@ -68,6 +69,7 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
         body: JSON.stringify({
           name,
           prompt,
+          purpose: purpose.trim(),
           useMasterPrompt,
           language,
           fields: fields.map((field) =>
@@ -151,6 +153,21 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
             onChange={(changeEvent) => setRetryCap(Number(changeEvent.target.value))}
           />
         </div>
+      </div>
+
+      <div>
+        <label htmlFor="campaign-purpose">Purpose of this call</label>
+        <p className="small muted">
+          One line added after the agent prompt. Leave it empty when the usual prompt is enough.
+        </p>
+        <textarea
+          id="campaign-purpose"
+          value={purpose}
+          maxLength={500}
+          rows={2}
+          placeholder="Ask speakers to arrive 20 minutes early"
+          onChange={(changeEvent) => setPurpose(changeEvent.target.value)}
+        />
       </div>
 
       <div className="stack">

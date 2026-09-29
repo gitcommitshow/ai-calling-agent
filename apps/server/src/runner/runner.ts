@@ -8,7 +8,8 @@
 import type { CallLimits } from '../config.ts';
 import type { ExtractionPort } from '../extraction/types.ts';
 import { allUnknown } from '../extraction/types.ts';
-import { newAttemptId, newRunId, newTestCallId } from '../storage/ids.ts';
+import { newAttemptId, newQuestionId, newRunId, newTestCallId } from '../storage/ids.ts';
+import { emptyEventBrief } from '../storage/types.ts';
 import type {
   AttemptEvent,
   AttemptEventKind,
@@ -16,9 +17,11 @@ import type {
   CallOutcome,
   CampaignRecord,
   CaptureField,
+  EventBrief,
   EventRecord,
   GuestRecord,
   Language,
+  OpenQuestion,
   RunKind,
   RunRecord,
   Storage,
@@ -33,17 +36,26 @@ import type {
   TelephonyPort,
 } from '../telephony/types.ts';
 import type { VoiceBackendPort, VoiceSession } from '../voice/types.ts';
-import { checkGuardrails, countAttemptsByGuest } from './guardrails.ts';
+import { checkGuardrails, countAttemptsByGuest, scheduleBlockReason } from './guardrails.ts';
 import { assemblePrompt } from './prompt.ts';
 import { assembleTestPrompt } from './test-prompt.ts';
 
 /** A second run or test call was asked for while one is still going. */
 export class RunConflictError extends Error {
-  constructor(readonly runId: string) {
-    super(`a call is already in progress: ${runId}`);
+  constructor(
+    readonly runId: string,
+    message?: string,
+  ) {
+    super(message ?? `a call is already in progress: ${runId}`);
     this.name = 'RunConflictError';
   }
 }
+
+/** How far ahead a start may be set, and how long a down server may still honor one. */
+const SCHEDULE_LIMIT_MS = 14 * 24 * 60 * 60 * 1000;
+const SCHEDULE_GRACE_MS = 60 * 1000;
+/** Wait this long, then try again, when the start time arrives during another call. */
+const SCHEDULE_RETRY_MS = 1000;
 
 /** A guardrail refused the guest before anything was dialed. */
 export class GuardrailError extends Error {
@@ -51,6 +63,12 @@ export class GuardrailError extends Error {
     super(message);
     this.name = 'GuardrailError';
   }
+}
+
+/** Test hook for the scheduled-start timer. Production uses the real clock. */
+export interface RunnerTimers {
+  set(fn: () => void, ms: number): unknown;
+  clear(handle: unknown): void;
 }
 
 export interface RunnerDeps {
@@ -61,6 +79,7 @@ export interface RunnerDeps {
   limits: CallLimits;
   now?: () => Date;
   log?: (message: string) => void;
+  timers?: RunnerTimers;
 }
 
 /** What startTestCall needs after the API has resolved number and prompt source. */
@@ -91,6 +110,7 @@ interface CallSnapshot {
   endedAt: string | null;
   transcript: TranscriptTurn[];
   capturedFields: Record<string, string>;
+  openQuestions: OpenQuestion[];
   voiceBackend: AttemptRecord['voiceBackend'];
   fallbackUsed: boolean;
   providerCallId: string | null;
@@ -109,6 +129,9 @@ interface LiveCall {
   to: string;
   language: Language;
   fields: CaptureField[];
+  /** Guest calls record unanswered questions. Pipeline tests do not. */
+  captureQuestions: boolean;
+  brief: EventBrief;
   snapshot: CallSnapshot;
   persist: (snapshot: CallSnapshot) => Promise<void>;
   buildPrompt: () => Promise<string>;
@@ -122,13 +145,21 @@ interface LiveCall {
 
 export class CallRunner {
   private readonly deps: RunnerDeps;
+  private readonly setTimer: RunnerTimers['set'];
+  private readonly clearTimer: RunnerTimers['clear'];
   private activeRunId: string | null = null;
   private stopRequested = false;
   private live: LiveCall | null = null;
   private writes: Promise<unknown> = Promise.resolve();
+  /** Serializes schedule create, cancel, and fire so they cannot pass each other. */
+  private scheduleQueue: Promise<unknown> = Promise.resolve();
+  private readonly scheduledTimers = new Map<string, unknown>();
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
+    this.setTimer = deps.timers?.set ?? ((fn, ms) => setTimeout(fn, ms));
+    this.clearTimer =
+      deps.timers?.clear ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
     deps.telephony.onEvent((event) => this.onTelephonyEvent(event));
   }
 
@@ -159,18 +190,19 @@ export class CallRunner {
    */
   async startRun(
     campaign: CampaignRecord,
-    options: { kind: RunKind; guestIds?: string[] },
+    options: { kind: RunKind; guestIds?: string[]; waiveRetryCap?: boolean },
   ): Promise<RunRecord> {
     if (this.activeRunId) throw new RunConflictError(this.activeRunId);
 
     const guestIds = options.guestIds ?? [...campaign.queue];
     if (guestIds.length === 0) throw new GuardrailError('the campaign queue is empty');
+    const waiveRetryCap = options.waiveRetryCap === true;
 
     // A single guest is refused up front, so the organizer sees the reason at
     // once rather than finding a skipped entry on a finished run. Queue runs
     // are checked per guest instead, because a long queue goes stale mid-run.
     if (options.kind === 'single') {
-      await this.assertGuestCallable(campaign, guestIds[0]!);
+      await this.assertGuestCallable(campaign, guestIds[0]!, waiveRetryCap);
     }
 
     const startedAt = this.now().toISOString();
@@ -185,6 +217,8 @@ export class CallRunner {
       currentAttemptId: null,
       attemptIds: [],
       skipped: [],
+      waiveRetryCap,
+      scheduledFor: null,
       startedAt,
       endedAt: null,
       error: null,
@@ -200,6 +234,59 @@ export class CallRunner {
     });
 
     return run;
+  }
+
+  /**
+   * Remember a queue run for a later start. Nothing is dialed yet. Stop cancels
+   * it. The saved queue is read again when the start time arrives, so the
+   * organizer can still change who is called.
+   */
+  async scheduleRun(campaign: CampaignRecord, startsAt: Date): Promise<RunRecord> {
+    const at = startsAt.getTime();
+    if (Number.isNaN(at)) throw new GuardrailError('choose a valid start time');
+    const now = this.now().getTime();
+    if (at <= now) throw new GuardrailError('choose a start time in the future');
+    if (at - now > SCHEDULE_LIMIT_MS) {
+      throw new GuardrailError('choose a start time within the next 14 days');
+    }
+    if (campaign.queue.length === 0) throw new GuardrailError('the campaign queue is empty');
+
+    return this.enqueueSchedule(async () => {
+      const existing = await this.findScheduledRun();
+      if (existing) {
+        throw new RunConflictError(
+          existing.id,
+          `a run is already scheduled (${existing.id}). Cancel it before scheduling another.`,
+        );
+      }
+
+      const event = await this.deps.storage.getEvent(campaign.eventId);
+      if (!event) throw new GuardrailError(`event not found: ${campaign.eventId}`);
+      const blocked = scheduleBlockReason(event, campaign, startsAt);
+      if (blocked) throw new GuardrailError(blocked);
+
+      const createdAt = this.now().toISOString();
+      const run: RunRecord = {
+        id: newRunId(createdAt),
+        eventId: campaign.eventId,
+        campaignId: campaign.id,
+        kind: 'queue',
+        status: 'scheduled',
+        guestIds: [...campaign.queue],
+        currentGuestId: null,
+        currentAttemptId: null,
+        attemptIds: [],
+        skipped: [],
+        waiveRetryCap: false,
+        scheduledFor: startsAt.toISOString(),
+        startedAt: createdAt,
+        endedAt: null,
+        error: null,
+      };
+      await this.deps.storage.putRun(run);
+      this.arm(run.id, at - this.now().getTime());
+      return run;
+    });
   }
 
   /**
@@ -251,10 +338,16 @@ export class CallRunner {
     return call;
   }
 
-  /** Stop the active run: no further dials, and the live call is hung up. */
+  /** Stop the active run, or cancel a start that has not dialed yet. */
   async stopRun(runId: string): Promise<RunRecord | null> {
     const run = await this.deps.storage.findRun(runId);
     if (!run) return null;
+    if (run.status === 'scheduled') return this.enqueueSchedule(() => this.cancelScheduled(runId));
+    return this.stopActive(run);
+  }
+
+  /** No further dials, and the live call is hung up. */
+  private async stopActive(run: RunRecord): Promise<RunRecord> {
     if (run.status !== 'running' && run.status !== 'stopping') return run;
 
     this.stopRequested = true;
@@ -338,7 +431,168 @@ export class CallRunner {
     return { attempts, runs, testCalls };
   }
 
-  private async assertGuestCallable(campaign: CampaignRecord, guestId: string): Promise<void> {
+  /**
+   * Put scheduled runs back on the clock after a restart. A start that already
+   * passed, beyond a short grace, is cancelled so a late boot cannot dial hours
+   * after the organizer expected.
+   */
+  async restoreSchedules(): Promise<number> {
+    let restored = 0;
+    for (const eventId of await this.deps.storage.listEventIds()) {
+      for (const run of await this.deps.storage.listRuns(eventId)) {
+        if (run.status !== 'scheduled' || !run.scheduledFor) continue;
+        const delay = new Date(run.scheduledFor).getTime() - this.now().getTime();
+        if (delay < -SCHEDULE_GRACE_MS) {
+          await this.deps.storage.putRun({
+            ...run,
+            status: 'stopped',
+            endedAt: this.now().toISOString(),
+            error: 'the scheduled start passed while the server was down',
+          });
+          continue;
+        }
+        this.arm(run.id, Math.max(0, delay));
+        restored += 1;
+      }
+    }
+    if (restored > 0) this.log(`restored ${restored} scheduled run(s)`);
+    return restored;
+  }
+
+  /** Run schedule changes one at a time so a cancel cannot lose to the timer. */
+  private enqueueSchedule<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.scheduleQueue.then(work, work);
+    this.scheduleQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /** The one run that is waiting for its start time, if any. */
+  private async findScheduledRun(): Promise<RunRecord | null> {
+    for (const eventId of await this.deps.storage.listEventIds()) {
+      for (const run of await this.deps.storage.listRuns(eventId)) {
+        if (run.status === 'scheduled') return run;
+      }
+    }
+    return null;
+  }
+
+  /** Call `onScheduleDue` once, replacing any timer already waiting for this run. */
+  private arm(runId: string, delayMs: number): void {
+    this.clearTimerFor(runId);
+    const handle = this.setTimer(() => {
+      void this.onScheduleDue(runId);
+    }, delayMs);
+    this.scheduledTimers.set(runId, handle);
+  }
+
+  /** Drop a pending start timer. A timer that already fired is a no-op. */
+  private clearTimerFor(runId: string): void {
+    const handle = this.scheduledTimers.get(runId);
+    if (handle === undefined) return;
+    this.clearTimer(handle);
+    this.scheduledTimers.delete(runId);
+  }
+
+  /** Timer callback. A failure is stored on the run so it does not sit scheduled forever. */
+  private async onScheduleDue(runId: string): Promise<void> {
+    try {
+      await this.enqueueSchedule(() => this.beginScheduled(runId));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`scheduled run ${runId} failed to start: ${message}`);
+      if (this.activeRunId === runId) this.activeRunId = null;
+      const latest = await this.deps.storage.findRun(runId).catch(() => null);
+      if (latest?.status !== 'scheduled') return;
+      await this.deps.storage
+        .putRun({
+          ...latest,
+          status: 'failed',
+          endedAt: this.now().toISOString(),
+          error: message,
+        })
+        .catch(() => undefined);
+    }
+  }
+
+  /**
+   * Turn a due schedule into a live run. If another call still holds the lock,
+   * wait and try again. The queue is whatever is saved at this moment.
+   */
+  private async beginScheduled(runId: string): Promise<void> {
+    this.clearTimerFor(runId);
+    const run = await this.deps.storage.findRun(runId);
+    if (!run || run.status !== 'scheduled') return;
+
+    if (this.activeRunId) {
+      this.arm(runId, SCHEDULE_RETRY_MS);
+      return;
+    }
+
+    // Claim the lock before the next await so an immediate start cannot slip in.
+    this.activeRunId = runId;
+    this.stopRequested = false;
+    try {
+      const campaign = await this.deps.storage.getCampaign(run.eventId, run.campaignId);
+      if (!campaign || campaign.queue.length === 0) {
+        this.activeRunId = null;
+        await this.deps.storage.putRun({
+          ...run,
+          status: 'failed',
+          guestIds: campaign ? [] : run.guestIds,
+          endedAt: this.now().toISOString(),
+          error: campaign
+            ? 'the campaign queue was empty at the scheduled start'
+            : 'the campaign was removed before the scheduled start',
+        });
+        return;
+      }
+
+      const running: RunRecord = {
+        ...run,
+        status: 'running',
+        guestIds: [...campaign.queue],
+      };
+      await this.deps.storage.putRun(running);
+
+      void this.execute(running).catch(async (error: unknown) => {
+        this.log(`run ${running.id} failed: ${String(error)}`);
+        await this.finishRun(
+          running,
+          'failed',
+          error instanceof Error ? error.message : String(error),
+        );
+      });
+    } catch (error) {
+      if (this.activeRunId === runId) this.activeRunId = null;
+      throw error;
+    }
+  }
+
+  /** Drop a schedule that has not started. If it already started, stop that run. */
+  private async cancelScheduled(runId: string): Promise<RunRecord | null> {
+    const run = await this.deps.storage.findRun(runId);
+    if (!run) return null;
+    if (run.status !== 'scheduled') return this.stopActive(run);
+
+    this.clearTimerFor(runId);
+    const stopped: RunRecord = {
+      ...run,
+      status: 'stopped',
+      endedAt: this.now().toISOString(),
+      error: null,
+    };
+    await this.deps.storage.putRun(stopped);
+    return stopped;
+  }
+
+  private async assertGuestCallable(
+    campaign: CampaignRecord,
+    guestId: string,
+    waiveRetryCap: boolean,
+  ): Promise<void> {
     const event = await this.deps.storage.getEvent(campaign.eventId);
     if (!event) throw new GuardrailError(`event not found: ${campaign.eventId}`);
 
@@ -351,6 +605,7 @@ export class CallRunner {
       campaign,
       attemptsByGuest: countAttemptsByGuest(attempts, campaign.id),
       now: this.now(),
+      waiveRetryCap,
     });
     if (!guard.ok) throw new GuardrailError(guard.reason);
   }
@@ -386,6 +641,7 @@ export class CallRunner {
               campaign,
               attemptsByGuest: countAttemptsByGuest(attempts, campaign.id),
               now: this.now(),
+              waiveRetryCap: run.waiveRetryCap === true,
             })
           : { ok: false as const, reason: 'guest is no longer on the event' };
 
@@ -462,6 +718,8 @@ export class CallRunner {
       to: guest.phone,
       language: campaign.language,
       fields: campaign.fields,
+      captureQuestions: true,
+      brief: event.brief ?? emptyEventBrief(),
       startedAt,
       createdDetail: `queued for ${guest.name}`,
       persist: async (snapshot) => {
@@ -501,10 +759,12 @@ export class CallRunner {
       to: call.to,
       language: call.language,
       fields: call.fields,
+      captureQuestions: false,
+      brief: emptyEventBrief(),
       startedAt: call.startedAt,
       createdDetail: `pipeline test to ${call.to}`,
       persist: async (snapshot) => {
-        await this.deps.storage.putTestCall({ ...call, ...snapshot });
+        await this.deps.storage.putTestCall({ ...call, ...snapshotForTest(snapshot) });
       },
       buildPrompt: async () => {
         const settings = await this.deps.storage.getSettings();
@@ -529,7 +789,7 @@ export class CallRunner {
 
     const snapshot = await this.runLiveCall(live);
     this.log(endedLine(`test call ${call.id}`, snapshot));
-    return { ...call, ...snapshot };
+    return { ...call, ...snapshotForTest(snapshot) };
   }
 
   /** Build the in-memory live-call shell before dialing. */
@@ -538,6 +798,8 @@ export class CallRunner {
     to: string;
     language: Language;
     fields: CaptureField[];
+    captureQuestions: boolean;
+    brief: EventBrief;
     startedAt: string;
     createdDetail: string;
     persist: (snapshot: CallSnapshot) => Promise<void>;
@@ -548,6 +810,8 @@ export class CallRunner {
       to: input.to,
       language: input.language,
       fields: input.fields,
+      captureQuestions: input.captureQuestions,
+      brief: input.brief,
       snapshot: {
         status: 'dialing',
         outcome: null,
@@ -555,6 +819,7 @@ export class CallRunner {
         endedAt: null,
         transcript: [],
         capturedFields: {},
+        openQuestions: [],
         voiceBackend: null,
         fallbackUsed: false,
         providerCallId: null,
@@ -632,7 +897,9 @@ export class CallRunner {
     );
     if (result.error) snapshot.error = result.error;
 
-    if (outcome === 'answered' && live.fields.length > 0) {
+    const shouldExtract =
+      outcome === 'answered' && (live.fields.length > 0 || live.captureQuestions);
+    if (shouldExtract) {
       snapshot = this.record(
         { ...snapshot, status: 'extracting' },
         'extraction_started',
@@ -640,9 +907,10 @@ export class CallRunner {
       );
       live.snapshot = snapshot;
       await this.persistLive(live);
-      snapshot = await this.runExtraction(snapshot, live.fields, live.language);
+      snapshot = await this.runExtraction(live, snapshot);
     } else {
       snapshot.capturedFields = allUnknown(live.fields);
+      snapshot.openQuestions = [];
     }
 
     snapshot.status = 'done';
@@ -666,28 +934,36 @@ export class CallRunner {
    * Extraction never loses a call: a failure keeps the transcript, leaves the
    * fields unknown, and records the error so it can be re-run later.
    */
-  private async runExtraction(
-    snapshot: CallSnapshot,
-    fields: CaptureField[],
-    language: Language,
-  ): Promise<CallSnapshot> {
+  private async runExtraction(live: LiveCall, snapshot: CallSnapshot): Promise<CallSnapshot> {
     try {
-      const captured = await this.deps.extraction.extract({
-        fields,
+      const result = await this.deps.extraction.extract({
+        fields: live.fields,
         transcript: snapshot.transcript,
-        language,
+        language: live.language,
+        brief: live.brief,
+        captureQuestions: live.captureQuestions,
       });
+      const openQuestions = live.captureQuestions
+        ? result.openQuestions.map((text) => ({ id: newQuestionId(), text, status: 'open' as const }))
+        : [];
+      const detail = [
+        Object.keys(result.fields).join(', '),
+        openQuestions.length > 0 ? `${openQuestions.length} open question(s)` : '',
+      ]
+        .filter(Boolean)
+        .join('; ');
       return this.record(
-        { ...snapshot, capturedFields: captured },
+        { ...snapshot, capturedFields: result.fields, openQuestions },
         'extraction_done',
-        Object.keys(captured).join(', ') || null,
+        detail || null,
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return this.record(
         {
           ...snapshot,
-          capturedFields: allUnknown(fields),
+          capturedFields: allUnknown(live.fields),
+          openQuestions: [],
           error: snapshot.error ?? `extraction failed: ${message}`,
         },
         'extraction_failed',
@@ -856,6 +1132,12 @@ export class CallRunner {
       });
     }
   }
+}
+
+/** Pipeline tests share the call snapshot but must not store guest questions. */
+function snapshotForTest(snapshot: CallSnapshot): Omit<CallSnapshot, 'openQuestions'> {
+  const { openQuestions: _questions, ...rest } = snapshot;
+  return rest;
 }
 
 /** One log line for a finished attempt or test call, including the error if any. */

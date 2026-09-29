@@ -1,24 +1,25 @@
 /**
- * Unit tests for Indian phone normalization. No live third-party services.
+ * Unit tests for guest phone normalization. No live third-party services.
  */
 import { expect } from 'chai';
-import { normalizeIndianPhone } from '../src/domain/phone';
+import { canCallPhone, normalizeGuestPhone, normalizeIndianPhone } from '../src/domain/phone';
 
-describe('normalizeIndianPhone', () => {
-  it('turns a ten-digit mobile into E.164', () => {
-    expect(normalizeIndianPhone('9876543210')).to.deep.equal({ phone: '+919876543210' });
+describe('normalizeGuestPhone', () => {
+  it('treats a ten-digit mobile as India', () => {
+    expect(normalizeGuestPhone('9876543210')).to.deep.equal({ phone: '+919876543210' });
+    expect(normalizeGuestPhone('+91 98765-43210').phone).to.equal('+919876543210');
+    expect(normalizeGuestPhone('09876543210').phone).to.equal('+919876543210');
   });
 
-  it('strips punctuation and country prefixes', () => {
-    for (const raw of ['+91 98765-43210', '091 (98765) 43210', '09876543210']) {
-      expect(normalizeIndianPhone(raw).phone, raw).to.equal('+919876543210');
-    }
+  it('keeps a number that already has another country code', () => {
+    expect(normalizeGuestPhone('+1 202 555 0143').phone).to.equal('+12025550143');
+    expect(canCallPhone('+12025550143')).to.equal(false);
+    expect(canCallPhone('+919876543210')).to.equal(true);
   });
 
-  it('rejects non-Indian and malformed numbers with a reason', () => {
+  it('rejects a blank value and a local number that is not an Indian mobile', () => {
+    expect(normalizeGuestPhone('  ').reason).to.equal('no phone number');
+    expect(normalizeGuestPhone('1234567890').reason).to.match(/country code/);
     expect(normalizeIndianPhone('+1 202 555 0143').phone).to.equal(null);
-    expect(normalizeIndianPhone('+1 202 555 0143').reason).to.match(/only Indian/);
-    expect(normalizeIndianPhone('1234567890').reason).to.match(/must start 6-9/);
-    expect(normalizeIndianPhone('  ').reason).to.equal('no phone number');
   });
 });

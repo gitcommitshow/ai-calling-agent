@@ -234,6 +234,12 @@ code {
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
 }
 
+.guest-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
 .entity-card {
   display: flex;
   flex-direction: column;
@@ -448,6 +454,40 @@ input[type='file'] {
   padding: var(--space-2);
 }
 
+/* Country code stays visible; the input holds the national number. */
+.phone-field {
+  display: flex;
+  align-items: center;
+  background: var(--sunken);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-inset);
+}
+
+.phone-field:focus-within {
+  background: var(--raised);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.phone-field input.country-code {
+  flex: 0 0 4.5rem;
+  width: 4.5rem;
+  padding-right: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.phone-field input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: transparent;
+  box-shadow: none;
+}
+
+.phone-field input:focus {
+  background: transparent;
+  box-shadow: none;
+}
+
 textarea {
   min-height: 11rem;
   font-family: var(--font-mono);
@@ -491,6 +531,33 @@ button.secondary {
 
 button.secondary .icon {
   color: var(--text-muted);
+}
+
+button.link {
+  background: none;
+  color: var(--text-muted);
+  box-shadow: none;
+  padding: 0;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.link:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  color: var(--accent);
+}
+
+.luma-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.luma-row .grow {
+  flex: 1 1 16rem;
 }
 
 button.tiny {

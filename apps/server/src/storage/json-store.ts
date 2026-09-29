@@ -14,8 +14,10 @@ import {
 import type {
   AttemptRecord,
   CampaignRecord,
+  EventBrief,
   EventRecord,
   GuestRecord,
+  OpenQuestion,
   RunRecord,
   Storage,
   TestCallRecord,
@@ -78,7 +80,8 @@ export class JsonStore implements Storage {
   }
 
   async getEvent(eventId: string): Promise<EventRecord | null> {
-    return readJson<EventRecord>(join(this.eventDir(eventId), 'event.json'));
+    const event = await readJson<EventRecord>(join(this.eventDir(eventId), 'event.json'));
+    return event ? normalizeEvent(event) : null;
   }
 
   async putEvent(event: EventRecord): Promise<void> {
@@ -86,12 +89,14 @@ export class JsonStore implements Storage {
   }
 
   async listGuests(eventId: string): Promise<GuestRecord[]> {
-    return readJsonDir<GuestRecord>(join(this.eventDir(eventId), 'guests'));
+    const guests = await readJsonDir<GuestRecord>(join(this.eventDir(eventId), 'guests'));
+    return guests.map(normalizeGuest);
   }
 
   async getGuest(eventId: string, guestId: string): Promise<GuestRecord | null> {
     assertSafeId('guest', guestId);
-    return readJson<GuestRecord>(join(this.eventDir(eventId), 'guests', `${guestId}.json`));
+    const guest = await readJson<GuestRecord>(join(this.eventDir(eventId), 'guests', `${guestId}.json`));
+    return guest ? normalizeGuest(guest) : null;
   }
 
   /** Import semantics: the uploaded list becomes the whole guest list for the event. */
@@ -167,12 +172,13 @@ export class JsonStore implements Storage {
 
   async listRuns(eventId: string): Promise<RunRecord[]> {
     const runs = await readJsonDir<RunRecord>(join(this.eventDir(eventId), 'runs'));
-    return runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return runs.map(normalizeRun).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
   async getRun(eventId: string, runId: string): Promise<RunRecord | null> {
     assertSafeId('run', runId);
-    return readJson<RunRecord>(join(this.eventDir(eventId), 'runs', `${runId}.json`));
+    const run = await readJson<RunRecord>(join(this.eventDir(eventId), 'runs', `${runId}.json`));
+    return run ? normalizeRun(run) : null;
   }
 
   /** Run ids are unique across events, so a lookup can scan event folders. */
@@ -231,7 +237,38 @@ function normalizeCampaign(campaign: CampaignRecord): CampaignRecord {
   return {
     ...campaign,
     useMasterPrompt: campaign.useMasterPrompt === true,
+    purpose: typeof campaign.purpose === 'string' ? campaign.purpose : '',
   };
+}
+
+/** Older guest files have no origin. Those guests came from an import. */
+function normalizeGuest(guest: GuestRecord): GuestRecord {
+  return { ...guest, origin: guest.origin === 'manual' ? 'manual' : 'imported' };
+}
+
+/** Older event files have no brief and no Luma link. Both stay empty. */
+function normalizeEvent(event: EventRecord): EventRecord {
+  const sourceUrl = typeof event.sourceUrl === 'string' ? event.sourceUrl.trim() : '';
+  return {
+    ...event,
+    brief: normalizeBrief(event.brief),
+    sourceUrl: sourceUrl || null,
+  };
+}
+
+/** Keep only string fields, so a partial or missing brief cannot crash prompt assembly. */
+function normalizeBrief(brief: EventBrief | undefined): EventBrief {
+  return {
+    about: typeof brief?.about === 'string' ? brief.about : '',
+    where: typeof brief?.where === 'string' ? brief.where : '',
+    notes: typeof brief?.notes === 'string' ? brief.notes : '',
+  };
+}
+
+/** Older runs are immediate dials, so they still honor the retry cap and have no start time. */
+function normalizeRun(run: RunRecord): RunRecord {
+  const scheduledFor = typeof run.scheduledFor === 'string' && run.scheduledFor ? run.scheduledFor : null;
+  return { ...run, waiveRetryCap: run.waiveRetryCap === true, scheduledFor };
 }
 
 /**
@@ -246,12 +283,32 @@ function normalizeAttempt(attempt: AttemptRecord): AttemptRecord {
     runId: attempt.runId ?? null,
     transcript: Array.isArray(attempt.transcript) ? attempt.transcript : [],
     capturedFields: attempt.capturedFields ?? {},
+    openQuestions: normalizeOpenQuestions(attempt.openQuestions),
     fallbackUsed: attempt.fallbackUsed === true,
     providerCallId: attempt.providerCallId ?? null,
     voiceSessionId: attempt.voiceSessionId ?? null,
     timeline: Array.isArray(attempt.timeline) ? attempt.timeline : [],
     error: attempt.error ?? null,
   };
+}
+
+/** Drop anything that is not a stored question, so a bad file cannot surface a blank. */
+function normalizeOpenQuestions(value: unknown): OpenQuestion[] {
+  if (!Array.isArray(value)) return [];
+  const questions: OpenQuestion[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Partial<OpenQuestion>;
+    if (typeof record.id !== 'string' || typeof record.text !== 'string') continue;
+    const text = record.text.trim();
+    if (!text) continue;
+    questions.push({
+      id: record.id,
+      text,
+      status: record.status === 'resolved' ? 'resolved' : 'open',
+    });
+  }
+  return questions;
 }
 
 async function listDirNames(dirPath: string): Promise<string[]> {

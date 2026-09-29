@@ -10,7 +10,13 @@
  * for it yet, by DESIGN D5.
  */
 import type { ContextFieldId, OrgSettings } from '../storage/settings.ts';
-import type { CampaignRecord, CaptureField, EventRecord, GuestRecord } from '../storage/types.ts';
+import type {
+  CampaignRecord,
+  CaptureField,
+  EventBrief,
+  EventRecord,
+  GuestRecord,
+} from '../storage/types.ts';
 
 export interface PromptContext {
   event: EventRecord;
@@ -30,6 +36,20 @@ function formatEventTime(iso: string, timezone: string): string {
     dateStyle: 'medium',
     timeStyle: 'short',
   }).format(new Date(iso));
+}
+
+/** Public description lines. Empty fields are omitted so a blank brief adds nothing. */
+function describeBrief(brief: EventBrief | undefined): string[] {
+  if (!brief) return [];
+  const lines: string[] = [];
+  if (brief.about.trim()) lines.push(brief.about.trim());
+  if (brief.where.trim()) lines.push(`Where: ${brief.where.trim()}`);
+  return lines;
+}
+
+/** Organizer notes, which outrank the description when the two disagree. */
+function describeNotes(brief: EventBrief | undefined): string {
+  return brief?.notes.trim() ?? '';
 }
 
 function describeField(field: CaptureField): string {
@@ -110,26 +130,57 @@ function buildContextLines(ctx: PromptContext): string[] {
   return lines;
 }
 
+/** The only line a custom campaign adds. The agent prompt itself is unchanged. */
+function purposeLine(purpose: string | undefined, ctx: PromptContext): string | null {
+  const text = purpose?.trim();
+  if (!text) return null;
+  return fillPlaceholders(`The main purpose of this call: ${text}`, ctx);
+}
+
 /** The full prompt handed to a voice backend for one call. */
 export function assemblePrompt(ctx: PromptContext): string {
   const { campaign, settings } = ctx;
   const sections = [fillPlaceholders(effectivePrompt(campaign, settings).trim(), ctx)];
+  const purpose = purposeLine(campaign.purpose, ctx);
+  if (purpose) sections.push(purpose);
 
   const contextLines = buildContextLines(ctx);
   if (contextLines.length > 0) {
     sections.push(['Call context:', ...contextLines].join('\n'));
   }
 
-  if (allowed(settings, 'capture.fields') && campaign.fields.length > 0) {
+  const briefLines = describeBrief(ctx.event.brief);
+  if (briefLines.length > 0) {
+    sections.push(['What you may say:', ...briefLines].join('\n'));
+  }
+
+  const notes = describeNotes(ctx.event.brief);
+  if (notes) {
     sections.push(
-      ['Collect these answers before ending the call:', ...campaign.fields.map(describeField)].join(
-        '\n',
-      ),
+      [
+        'Latest notes. When these disagree with the description or the call context, follow these notes:',
+        notes,
+      ].join('\n'),
     );
   }
 
+  if (allowed(settings, 'capture.fields') && campaign.fields.length > 0) {
+    sections.push(
+      [
+        'If the guest mentions these, note them. Do not interview them for a form:',
+        ...campaign.fields.map(describeField),
+      ].join('\n'),
+    );
+  }
+
+  const sources = notes
+    ? 'Answer the guest only from the event brief, the latest notes, and the call context. When the notes disagree with the description or the call context, follow the notes.'
+    : 'Answer the guest only from the event brief and the call context.';
   sections.push(
-    'When the guest asks to end the call, or when neither of you has more to add, thank them and end the call. Never invent event details.',
+    [
+      `${sources} If they ask for something that is not there, say once that the team will check and someone will call them back. Do not invent the missing fact.`,
+      'When the guest asks to end the call, or when neither of you has more to add, thank them and end the call.',
+    ].join('\n'),
   );
 
   return sections.join('\n\n');

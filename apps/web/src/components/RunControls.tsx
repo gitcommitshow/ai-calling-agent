@@ -1,13 +1,14 @@
 'use client';
 
 /**
- * Run control for one campaign: start the saved queue, watch who is on the
- * phone right now, and stop early. Polls only while a run is live, so an idle
- * page makes no requests.
+ * Run control for one campaign: start the saved queue now or at a chosen time,
+ * watch who is on the phone, and stop or cancel. Polls only while a run is
+ * live or waiting for its start, so an idle page makes no requests.
  */
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
+import { formatInZone, isoToZonedInput, zonedInputToIso } from '../lib/time';
 import {
   ATTEMPT_STATUS_LABELS,
   CALL_OUTCOME_LABELS,
@@ -32,8 +33,10 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
   const router = useRouter();
   const [run, setRun] = useState<Run | null>(initialRun);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [startsAt, setStartsAt] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const timeZone = campaign.callingWindow.timezone;
 
   const guestName = useCallback(
     (guestId: string | null) =>
@@ -42,20 +45,22 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
   );
 
   const live = run !== null && LIVE_RUN_STATUSES.includes(run.status);
+  const scheduled = run?.status === 'scheduled';
+  const following = live || scheduled;
 
   // Refresh the server-rendered parts of the page once a run settles, so the
   // results and attempt counts elsewhere stop being stale.
-  const wasLive = useRef(live);
+  const wasFollowing = useRef(following);
   useEffect(() => {
-    if (wasLive.current && !live) router.refresh();
-    wasLive.current = live;
-  }, [live, router]);
+    if (wasFollowing.current && !following) router.refresh();
+    wasFollowing.current = following;
+  }, [following, router]);
 
   // Keyed on the run id, not the run object, so one interval covers the whole
   // run instead of being torn down and rebuilt on every poll.
   const runId = run?.id ?? null;
   useEffect(() => {
-    if (!runId || !live) return;
+    if (!runId || !following) return;
 
     let cancelled = false;
     const tick = async () => {
@@ -81,7 +86,7 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [live, runId]);
+  }, [following, runId]);
 
   async function send(path: string, failure: string) {
     setBusy(true);
@@ -93,6 +98,28 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
       setRun(payload.run);
     } catch (sendError) {
       setError((sendError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Save a start time. The queue is dialed then, unless this is cancelled first. */
+  async function schedule(formEvent: FormEvent) {
+    formEvent.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaign.id}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ startsAt: zonedInputToIso(startsAt, timeZone) }),
+      });
+      const payload = (await response.json()) as { run?: Run; error?: string };
+      if (!response.ok || !payload.run) throw new Error(payload.error ?? 'could not schedule the run');
+      setRun(payload.run);
+      setStartsAt('');
+    } catch (scheduleError) {
+      setError((scheduleError as Error).message);
     } finally {
       setBusy(false);
     }
@@ -112,21 +139,67 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
         <div className="toolbar">
           <button
             type="button"
-            disabled={busy || live || campaign.queue.length === 0}
+            disabled={busy || live || scheduled || campaign.queue.length === 0}
             onClick={() => send(`/api/campaigns/${campaign.id}/runs`, 'could not start the run')}
           >
             <Icon name="phone" /> {live ? 'Running...' : `Call all ${campaign.queue.length}`}
           </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={busy || !live || !run}
-            onClick={() => run && send(`/api/runs/${run.id}/stop`, 'could not stop the run')}
-          >
-            <Icon name="ban" /> Stop
-          </button>
+          {scheduled && run ? (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy}
+              onClick={() => send(`/api/runs/${run.id}/stop`, 'could not cancel the schedule')}
+            >
+              <Icon name="ban" /> Cancel
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || !live || !run}
+              onClick={() => run && send(`/api/runs/${run.id}/stop`, 'could not stop the run')}
+            >
+              <Icon name="ban" /> Stop
+            </button>
+          )}
         </div>
       </div>
+
+      {scheduled && run?.scheduledFor ? (
+        <p className="status-line">
+          <Icon name="clock" />
+          <span>
+            Starts {formatInZone(run.scheduledFor, timeZone)}. Nothing is dialed until then.
+            Cancel if you change your mind. Whoever is in the saved queue when that time arrives
+            is who gets called.
+          </span>
+        </p>
+      ) : null}
+
+      {!live && !scheduled && campaign.queue.length > 0 ? (
+        <>
+          <form className="luma-row" onSubmit={(formEvent) => void schedule(formEvent)}>
+            <div className="grow">
+              <label htmlFor="schedule-start">Or start at ({timeZone})</label>
+              <input
+                id="schedule-start"
+                type="datetime-local"
+                value={startsAt}
+                required
+                min={isoToZonedInput(new Date().toISOString(), timeZone)}
+                onChange={(changeEvent) => setStartsAt(changeEvent.target.value)}
+              />
+            </div>
+            <button type="submit" className="secondary" disabled={busy || !startsAt}>
+              <Icon name="clock" /> {busy ? 'Scheduling...' : 'Schedule'}
+            </button>
+          </form>
+          <p className="small muted">
+            Nothing is dialed until the time you pick. Cancel before then if you change your mind.
+          </p>
+        </>
+      ) : null}
 
       {campaign.queue.length === 0 ? (
         <p className="empty">
@@ -138,7 +211,7 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
         <div className="stack">
           <div className="toolbar">
             <span className="chip strong">
-              {live ? <span className="live-dot" /> : <Icon name="list" />}{' '}
+              {live ? <span className="live-dot" /> : <Icon name={scheduled ? 'clock' : 'list'} />}{' '}
               {RUN_STATUS_LABELS[run.status]}
             </span>
             <span className="chip">

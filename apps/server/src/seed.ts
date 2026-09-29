@@ -35,6 +35,8 @@ function makeEvent(name: string, startsAt: string, hours: number): EventRecord {
     startsAt,
     endsAt: new Date(new Date(startsAt).getTime() + hours * 60 * 60 * 1000).toISOString(),
     timezone: 'Asia/Kolkata',
+    brief: { about: '', where: '', notes: '' },
+    sourceUrl: null,
     lastImport: null,
     createdAt: now,
     updatedAt: now,
@@ -131,6 +133,7 @@ function makeAttempt(
     capturedFields: answered
       ? { attended: 'yes', feedback: 'Well run, wanted more time' }
       : { attended: 'unknown', feedback: 'unknown' },
+    openQuestions: [],
     voiceBackend: answered ? 'elevenlabs' : null,
     fallbackUsed: false,
     providerCallId: `seed-call-${guest.id}`,
@@ -166,6 +169,8 @@ function makeRun(campaign: CampaignRecord, guestIds: string[], minutesAgo: numbe
     currentAttemptId: null,
     attemptIds: [],
     skipped: [],
+    waiveRetryCap: false,
+    scheduledFor: null,
     startedAt,
     endedAt: new Date(Date.now() - (minutesAgo - 60) * 60 * 1000).toISOString(),
     error: null,
@@ -187,6 +192,11 @@ async function seed(): Promise<void> {
   ];
   await store.putEvent({
     ...upcoming,
+    brief: {
+      about: 'A meetup about design systems.',
+      where: 'Studio 4, Bandra.',
+      notes: 'Bring a laptop. Doors at 6.',
+    },
     lastImport: {
       at: new Date().toISOString(),
       importedCount: upcomingGuests.length,
@@ -221,6 +231,11 @@ async function seed(): Promise<void> {
   ];
   await store.putEvent({
     ...finished,
+    brief: {
+      about: 'A dinner for founders.',
+      where: '',
+      notes: 'It ran for four hours.',
+    },
     lastImport: {
       at: daysFromNow(-5),
       importedCount: finishedGuests.length,
@@ -243,7 +258,15 @@ async function seed(): Promise<void> {
     130,
   );
   const attempts: AttemptRecord[] = [
-    makeAttempt(followUp, finishedGuests[0]!, 'answered', 120, run.id),
+    makeAttempt(followUp, finishedGuests[0]!, 'answered', 120, run.id, {
+      openQuestions: [
+        {
+          id: 'q-seedvenue',
+          text: 'Where was the dinner held?',
+          status: 'open',
+        },
+      ],
+    }),
     makeAttempt(followUp, finishedGuests[1]!, 'no_answer', 100, run.id),
     makeAttempt(followUp, finishedGuests[2]!, 'answered', 80, run.id, {
       capturedFields: { attended: 'no', feedback: 'unknown' },

@@ -57,9 +57,9 @@ describe('parseLumaCsv', () => {
 
     const result = parseLumaCsv(csv);
 
-    expect(result.guests.map((guest) => guest.name)).to.deep.equal(['Neha Iyer']);
-    expect(result.skippedWithoutPhone).to.equal(2);
-    expect(result.skipped.map((row) => row.row)).to.deep.equal([2, 3]);
-    expect(result.skipped[1]!.reason).to.match(/only Indian/);
+    expect(result.guests.map((guest) => guest.name)).to.deep.equal(['Sam Fox', 'Neha Iyer']);
+    expect(result.guests.map((guest) => guest.phone)).to.deep.equal(['+12025550143', '+919876543212']);
+    expect(result.skippedWithoutPhone).to.equal(1);
+    expect(result.skipped.map((row) => row.row)).to.deep.equal([2]);
   });
 });

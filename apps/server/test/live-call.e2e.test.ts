@@ -53,6 +53,8 @@ describe('one live outbound call', () => {
       startsAt: hoursFromNow(48),
       endsAt: hoursFromNow(52),
       timezone: 'Asia/Kolkata',
+      brief: { about: '', where: '', notes: '' },
+      sourceUrl: null,
       lastImport: null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),

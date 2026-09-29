@@ -29,6 +29,8 @@ const event: EventRecord = {
   startsAt: '2026-10-20T12:30:00.000Z',
   endsAt: '2026-10-20T16:30:00.000Z',
   timezone: 'Asia/Kolkata',
+  brief: { about: '', where: '', notes: '' },
+  sourceUrl: null,
   lastImport: null,
   createdAt: '2026-09-27T10:00:00.000Z',
   updatedAt: '2026-09-27T10:00:00.000Z',
@@ -162,7 +164,7 @@ describe('CallRunner', () => {
     store = new JsonStore(dataDir);
     telephony = new FakeCarrier();
     voice = new FakeVoice((attemptId) => telephony.endCall(attemptId));
-    extract = sinon.stub().resolves({ will_attend: 'yes' });
+    extract = sinon.stub().resolves({ fields: { will_attend: 'yes' }, openQuestions: [] });
     await store.putEvent(event);
   });
 
@@ -170,7 +172,10 @@ describe('CallRunner', () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  function buildRunner(voiceBackend: VoiceBackendPort = voice): CallRunner {
+  function buildRunner(
+    voiceBackend: VoiceBackendPort = voice,
+    timers?: { set(fn: () => void, ms: number): unknown; clear(handle: unknown): void },
+  ): CallRunner {
     return new CallRunner({
       storage: store,
       telephony,
@@ -179,6 +184,7 @@ describe('CallRunner', () => {
       limits: LIMITS,
       now: () => NOW,
       log: () => {},
+      timers,
     });
   }
 
@@ -244,6 +250,7 @@ describe('CallRunner', () => {
       endedAt: '2026-10-01T12:01:00.000Z',
       transcript: [],
       capturedFields: {},
+      openQuestions: [],
       voiceBackend: null,
       fallbackUsed: false,
       providerCallId: null,
@@ -297,7 +304,93 @@ describe('CallRunner', () => {
     );
     expect(telephony.hungUp).to.have.lengthOf(1);
   });
+
+  it('dials a scheduled run only after its start time', async () => {
+    const asha = guest('asha', '+919876543210');
+    const campaign = campaignFor([asha.id]);
+    await store.replaceGuests(event.id, [asha]);
+    await store.putCampaign(campaign);
+
+    const timers = new ManualTimers();
+    const runner = buildRunner(voice, timers);
+    const start = new Date(NOW.getTime() + 60 * 60 * 1000);
+    const scheduled = await runner.scheduleRun(campaign, start);
+
+    expect(scheduled.status).to.equal('scheduled');
+    expect(scheduled.scheduledFor).to.equal(start.toISOString());
+    expect(telephony.dialed).to.deep.equal([]);
+
+    timers.fireSoonest();
+    await waitFor(
+      async () => (await store.getRun(event.id, scheduled.id))?.status === 'completed',
+      'the scheduled run to complete',
+    );
+    expect(telephony.dialed).to.deep.equal([asha.phone]);
+  });
+
+  it('cancels a scheduled run before anything is dialed', async () => {
+    const asha = guest('asha', '+919876543210');
+    const campaign = campaignFor([asha.id]);
+    await store.replaceGuests(event.id, [asha]);
+    await store.putCampaign(campaign);
+
+    const timers = new ManualTimers();
+    const runner = buildRunner(voice, timers);
+    const scheduled = await runner.scheduleRun(campaign, new Date(NOW.getTime() + 60 * 60 * 1000));
+    const stopped = await runner.stopRun(scheduled.id);
+
+    expect(stopped?.status).to.equal('stopped');
+    expect(timers.pending).to.have.lengthOf(0);
+    expect(telephony.dialed).to.deep.equal([]);
+    expect((await store.getRun(event.id, scheduled.id))?.status).to.equal('stopped');
+  });
+
+  it('refuses a start time outside the calling window', async () => {
+    const asha = guest('asha', '+919876543210');
+    const campaign = campaignFor([asha.id]);
+    await store.replaceGuests(event.id, [asha]);
+    await store.putCampaign(campaign);
+
+    const timers = new ManualTimers();
+    const runner = buildRunner(voice, timers);
+    let refused = false;
+    try {
+      // 21:00 IST, after the 20:00 end of the window.
+      await runner.scheduleRun(campaign, new Date('2026-10-05T15:30:00.000Z'));
+    } catch (error) {
+      refused = true;
+      expect((error as Error).message).to.include('outside the calling window');
+    }
+
+    expect(refused).to.equal(true);
+    expect(await store.listRuns(event.id)).to.have.lengthOf(0);
+    expect(timers.pending).to.have.lengthOf(0);
+  });
 });
+
+/** Timer the schedule tests fire by hand, so a start an hour ahead does not wait. */
+class ManualTimers {
+  readonly pending: { id: number; fn: () => void }[] = [];
+  private next = 1;
+
+  set(fn: () => void, _ms: number): number {
+    const id = this.next++;
+    this.pending.push({ id, fn });
+    return id;
+  }
+
+  clear(handle: unknown): void {
+    const index = this.pending.findIndex((entry) => entry.id === handle);
+    if (index >= 0) this.pending.splice(index, 1);
+  }
+
+  /** Run the soonest callback. The caller waits on storage for the dial to finish. */
+  fireSoonest(): void {
+    const entry = this.pending.shift();
+    if (!entry) throw new Error('no timer is waiting');
+    entry.fn();
+  }
+}
 
 /** Voice backend that closes the call itself instead of waiting for the guest. */
 class AgentEndsVoice implements VoiceBackendPort {

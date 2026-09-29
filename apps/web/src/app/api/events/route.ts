@@ -14,6 +14,7 @@ export async function POST(request: Request) {
       startsAt?: string;
       endsAt?: string;
       timezone?: string;
+      brief?: { about?: string; where?: string; notes?: string };
     };
 
     const event = await createEvent({
@@ -21,6 +22,11 @@ export async function POST(request: Request) {
       startsAt: body.startsAt ?? '',
       endsAt: body.endsAt ?? '',
       timezone: body.timezone ?? 'Asia/Kolkata',
+      brief: {
+        about: body.brief?.about ?? '',
+        where: body.brief?.where ?? '',
+        notes: body.brief?.notes ?? '',
+      },
     });
 
     for (const template of campaignTemplates()) {

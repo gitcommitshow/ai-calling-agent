@@ -12,8 +12,8 @@ export async function POST(
 ) {
   const { campaignId } = await params;
   try {
-    const body = (await request.json()) as { guestId?: string };
-    const run = await callGuest(campaignId, body.guestId ?? '');
+    const body = (await request.json()) as { guestId?: string; openQuestionId?: string };
+    const run = await callGuest(campaignId, body.guestId ?? '', body.openQuestionId);
     return NextResponse.json({ run });
   } catch (error) {
     if (error instanceof ServerApiError) {

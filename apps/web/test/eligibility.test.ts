@@ -11,6 +11,8 @@ const event: Event = {
   startsAt: '2026-10-10T12:30:00.000Z',
   endsAt: '2026-10-10T16:30:00.000Z',
   timezone: 'Asia/Kolkata',
+  brief: { about: '', where: '', notes: '' },
+  sourceUrl: null,
   lastImport: null,
   createdAt: '2026-09-27T10:00:00.000Z',
   updatedAt: '2026-09-27T10:00:00.000Z',

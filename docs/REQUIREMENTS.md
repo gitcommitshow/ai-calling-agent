@@ -31,6 +31,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 7. Compare the quality of different voice approaches (all-in-one voice agent, separate speech-to-text + LLM + text-to-speech, speech-to-speech models) on real calls.
 8. Keep reaching guests when one voice provider runs out of credits.
 9. ✓ Let the organizer hear the full pipeline, and try a prompt, before any guest is dialed.
+10. When a call cannot answer a guest's question, save it and let the organizer call that guest back.
 
 ## Features
 
@@ -45,6 +46,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ A CSV has no event details, so the organizer enters the event name, start time, and end time when creating an event.
 - ✓ **Luma CSV:** accept Luma's guest-list CSV export ([download guest CSV](https://help.luma.com/p/download-guest-csv)). It includes name, email, phone (when provided), approval status, ticket type, check-in or join status, registration date, payment fields, and custom question columns. Preserve approval status on import. Luma statuses include at least: `approved` (Going), `pending_approval` (Pending), `invited` (Invited), `waitlist` (Waitlist), `declined` (Not Going). Check-in is separate from approval status.
 - ✓ Refresh from the platform or re-upload CSV before a campaign so the call set can match the latest list.
+- The organizer can add a guest by hand, with a name and a phone number. The country code is shown and starts at +91, and they can change it. Hand-added guests are listed apart from imported guests. A phone number can appear only once on an event. If that number is already on the list, the guest is not added and the organizer is told who already has it. Re-importing a CSV replaces imported guests and leaves hand-added guests in place. A guest from another country is kept. Calling that guest is not available yet.
 - Write RSVP or attendance updates back when the guest's answer is clear and the platform supports it. If write-back fails, keep the local result and mark the sync as failed. CSV-only lists have no write-back target unless a platform is also connected.
 
 ### Organizer call control
@@ -68,9 +70,10 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ The campaign editor shows the exact prompt the call will use.
 - ✓ One pre-event attempt and one post-event attempt per guest in the initial pass, unless the organizer explicitly retries. Do not start a post-event campaign before the event ends, or a pre-event campaign after it starts.
 - ✓ Place calls only in a reasonable local window. Cap retries.
-- ✓ Phase 1 calls guests in India only. The default window is 10:00-20:00 IST, editable per campaign.
+- ✓ Phase 1 places calls to Indian numbers only. Guests with another country code stay on the list and are not dialed. The default window is 10:00-20:00 IST, editable per campaign.
 - ✓ Phase 1 places calls one at a time, not in parallel.
 - ✓ Each campaign has one conversation language (for example English or Hindi), chosen by the organizer.
+- The organizer can add another campaign of either type from the queue, with its own name, its own guest list, and one line for what that call is for. It keeps that type's master prompt, and that line is the only addition. The timing rules for that type still apply.
 
 ### Voice approaches and fallback
 
@@ -91,6 +94,20 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ Do not leave voicemail messages in phase 1.
 - ✓ Extract the configured structured fields from the conversation. Use unknown when an answer is unclear.
 
+### Unanswered questions
+
+A call may answer only from the event description, the call context, and the organizer's notes when those are set. The notes win when they disagree with the description. When the guest asks for something that is not there, the agent says the team will check and someone will call them back. The question is saved so the organizer can place that call.
+
+- The event brief is one description the agent may say, including where the event is when that is known. Pasting a Luma event link on the home page reads that page and fills the name, times, and description, and creates the event when that link is not already saved. Checking the link again updates those details and leaves the notes. Entering an event without a link is a secondary path, and its start defaults to five hours from now. A guest CSV does not supply the brief. The campaign editor shows the brief and the notes inside the exact prompt the call will use.
+- The organizer can add one notes field for that event. It stays empty most of the time. It holds facts that are newer than the description, or that should not be on the public page, such as a change of plan, a logistical detail, or a note for one kind of guest. When the notes disagree with the description or other event details, the agent follows the notes.
+- The agent answers a guest's question from that description and, when set, from the notes. It does not invent details.
+- When the guest asks for something the brief does not contain, the agent says, once, that the team will check and someone will call them back later.
+- Each such question is stored on that attempt, in the guest's words, and linked to that guest. A question the brief answered is not stored. A question that is unclear is not stored.
+- Open questions are highlighted on the event and at the top of the results page, separate from ordinary captured fields. Each one links to the attempt and to placing a call to that guest.
+- The organizer places that call. The product does not dial it on its own. The call is allowed even when that guest has already used the campaign's retry cap. The calling window and the pre-event or post-event timing rules still apply, and the number still comes from the guest list.
+- The organizer marks a question resolved once it has been answered. It stays on the attempt and leaves the highlight. Placing the call does not resolve it.
+- A pipeline test does not create an open question. It does not call a guest.
+
 ### Pipeline test calls
 
 Before a campaign dials guests, the organizer can place one test call through the same pipeline a guest would get (telephony, speech, and the model) and hear what an attendee would hear.
@@ -109,14 +126,15 @@ Before a campaign dials guests, the organizer can place one test call through th
 - ✓ Keep the call transcript per attempt. Do not store call audio.
 - ✓ Each attempt keeps a timeline of the call.
 - ✓ Organizer can list results per guest and as an event summary.
+- Organizer can see which open questions still need a callback, and open the guest's attempt from each one.
 - Organizer can see which platform write-backs succeeded or failed.
 
 ## Non-goals
 
 - Selling, recruiting, or any call that is not for a specific event the organizer named. Pipeline test calls are in scope: they check this product, and they are not a general dialer.
 - Registering people, selling tickets, or deciding the agenda. We integrate with the event platform; we do not replace it.
-- Prescribing call scripts, tone, or nudge wording in product requirements. The organizer owns that via the campaign prompt.
-- Inbound support, live help during the event, or a multi-day drip of reminder calls.
+- Prescribing call scripts, tone, or nudge wording in product requirements. The organizer owns that via the campaign prompt. The shared rule in Unanswered questions is the exception: answer only from the event brief, and promise a team callback when a fact is missing.
+- Inbound support, live help during the event, or a multi-day drip of reminder calls. A callback the organizer places from a recorded question is in scope. An inbound call is not.
 - Shipping every event platform or voice vendor in phase 1.
 - Choosing concrete architecture, repo layout, or UI. Those stay open until [DESIGN.md](DESIGN.md).
 
@@ -141,6 +159,10 @@ Before a campaign dials guests, the organizer can place one test call through th
 - Phase 1 can complete an outbound call using the phase-1 resources above, including guest speech in English or Hindi.
 - ✓ A pipeline test hangs up after the answerer asks to cut the call, and hangs up on its own once both sides are done, without waiting out the silence limit or the maximum length.
 - ✓ The organizer can list per-guest results and an event summary without listening to the calls.
+- When a guest asks for a fact the brief does not contain, the call says the team will check and call back, and that question is highlighted and linked to calling that guest.
+- When a guest asks for a fact the brief does contain, the call answers with it, and no open question is stored.
+- The organizer can call that guest from the highlighted question after the retry cap is used, and can mark the question resolved so it leaves the highlight.
+- A pipeline test never adds an open question.
 - ✓ A guest call never dials a number that was not on the loaded list.
 - ✓ One click on the global test link calls the fixed test number through the same pipeline as a guest call.
 - ✓ One click on an event's test link calls that fixed number with the event's prompt and event details, so the answerer hears what that event's attendees would hear.

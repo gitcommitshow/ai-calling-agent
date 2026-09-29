@@ -1,9 +1,11 @@
 /**
- * Event page: import the guest list, then filter, select, and order the call
+ * Event page: import or add guests, then filter, select, and order the call
  * queue for a campaign.
  */
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { AddGuest } from '../../../components/AddGuest';
+import { EventBriefForm } from '../../../components/EventBriefForm';
 import { GuestImport } from '../../../components/GuestImport';
 import { GuestQueue } from '../../../components/GuestQueue';
 import { Icon } from '../../../components/Icon';
@@ -28,6 +30,12 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
       listCampaigns(id),
       listAttempts(id),
     ]);
+
+    const openQuestionCount = attempts.reduce(
+      (count, attempt) =>
+        count + (attempt.openQuestions ?? []).filter((question) => question.status === 'open').length,
+      0,
+    );
 
     return (
       <div className="stack">
@@ -57,10 +65,21 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
               <Link href={`/events/${event.id}/results`}>Results</Link>
             </li>
           </ul>
+          <p className="mt">
+            <Link href={`/events/${event.id}/results`} className="chip strong">
+              <Icon name="speech" /> {openQuestionCount}{' '}
+              {openQuestionCount === 1 ? 'question' : 'questions'} to call back
+            </Link>
+          </p>
         </div>
 
         <section className="card">
-          <h2>Guest import</h2>
+          <h2>Description</h2>
+          <EventBriefForm event={event} />
+        </section>
+
+        <section className="card">
+          <h2>Guests</h2>
           {event.lastImport ? (
             <p className="small muted">
               Last import {formatInZone(event.lastImport.at, event.timezone)}:{' '}
@@ -69,6 +88,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
             </p>
           ) : null}
           <GuestImport eventId={event.id} guestCount={guests.length} />
+          <AddGuest eventId={event.id} />
         </section>
 
         <section className="card">

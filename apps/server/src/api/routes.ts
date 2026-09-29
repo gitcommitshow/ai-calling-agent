@@ -12,11 +12,15 @@ import {
   parseCampaignPatch,
   parseEventInput,
   parseGuestImportInput,
+  parseManualGuestInput,
   parseOrgSettingsInput,
+  parseRunStartInput,
   parseTestCallRequestInput,
   type TestCallPromptSourceInput,
 } from './validate.ts';
-import { guestIdFor, newCampaignId, newEventId } from '../storage/ids.ts';
+import { importLumaEvent, refreshLumaEvent } from '../luma/page.ts';
+import { addManualGuest, applyGuestImport, ExistingGuestError } from '../guests/roster.ts';
+import { newCampaignId, newEventId } from '../storage/ids.ts';
 import { CALL_OUTCOMES } from '../storage/types.ts';
 import type {
   AttemptRecord,
@@ -72,6 +76,16 @@ function route(
   return { method, segments: pattern.split('/').filter(Boolean), handle };
 }
 
+/** The homepage sends `{ url }` for a Luma page. */
+function lumaUrlFrom(body: unknown): string {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw badRequest('url is required');
+  }
+  const url = (body as { url?: unknown }).url;
+  if (typeof url !== 'string' || url.trim() === '') throw badRequest('url is required');
+  return url;
+}
+
 async function loadEvent(storage: Storage, eventId: string): Promise<EventRecord> {
   const event = await storage.getEvent(eventId);
   if (!event) throw notFound(`event not found: ${eventId}`);
@@ -103,10 +117,25 @@ function requireCalling(services: ApiServices | undefined): ApiServices {
 async function startRun(
   services: ApiServices,
   campaign: CampaignRecord,
-  options: { kind: 'queue' | 'single'; guestIds?: string[] },
+  options: { kind: 'queue' | 'single'; guestIds?: string[]; waiveRetryCap?: boolean },
 ): Promise<RunRecord> {
   try {
     return await services.runner.startRun(campaign, options);
+  } catch (error) {
+    if (error instanceof RunConflictError) throw new HttpError(409, error.message);
+    if (error instanceof GuardrailError) throw new HttpError(400, error.message);
+    throw error;
+  }
+}
+
+/** Save a later start. 409 when another run is already waiting. */
+async function scheduleRun(
+  services: ApiServices,
+  campaign: CampaignRecord,
+  startsAt: Date,
+): Promise<RunRecord> {
+  try {
+    return await services.runner.scheduleRun(campaign, startsAt);
   } catch (error) {
     if (error instanceof RunConflictError) throw new HttpError(409, error.message);
     if (error instanceof GuardrailError) throw new HttpError(400, error.message);
@@ -298,6 +327,17 @@ const routes: Route[] = [
     body: { events: await storage.listEvents() },
   })),
 
+  route('POST', '/events/from-luma', async ({ body, storage }) => {
+    const url = lumaUrlFrom(body);
+    const result = await importLumaEvent(storage, url);
+    return { status: result.created ? 201 : 200, body: result };
+  }),
+
+  route('POST', '/events/:eventId/refresh-luma', async ({ params, storage }) => {
+    const event = await refreshLumaEvent(storage, params.eventId!);
+    return { status: 200, body: { event } };
+  }),
+
   route('POST', '/events', async ({ body, storage }) => {
     const input = parseEventInput(body);
     const now = new Date().toISOString();
@@ -307,6 +347,8 @@ const routes: Route[] = [
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       timezone: input.timezone,
+      brief: input.brief,
+      sourceUrl: null,
       lastImport: null,
       createdAt: now,
       updatedAt: now,
@@ -329,6 +371,8 @@ const routes: Route[] = [
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       timezone: input.timezone,
+      brief: input.brief,
+      sourceUrl: existing.sourceUrl,
       updatedAt: new Date().toISOString(),
     };
     await storage.putEvent(event);
@@ -340,22 +384,35 @@ const routes: Route[] = [
     return { status: 200, body: { guests: await storage.listGuests(params.eventId!) } };
   }),
 
+  route('POST', '/events/:eventId/guests', async ({ params, body, storage }) => {
+    const event = await loadEvent(storage, params.eventId!);
+    const input = parseManualGuestInput(body);
+    try {
+      const guest = await addManualGuest(storage, event.id, input);
+      return { status: 201, body: { guest } };
+    } catch (error) {
+      if (error instanceof ExistingGuestError) throw new HttpError(409, error.message);
+      throw error;
+    }
+  }),
+
   route('POST', '/events/:eventId/guests/import', async ({ params, body, storage }) => {
     const event = await loadEvent(storage, params.eventId!);
     const input = parseGuestImportInput(body);
+    const existing = await storage.listGuests(event.id);
+    const merged = applyGuestImport(existing, input.guests);
 
-    const byId = new Map<string, GuestRecord>();
-    for (const guest of input.guests) {
-      const id = guestIdFor(guest);
-      byId.set(id, { id, ...guest });
-    }
-    const guests = [...byId.values()];
-    await storage.replaceGuests(event.id, guests);
-    const removedFromQueues = await pruneQueues(storage, event.id, new Set(byId.keys()));
+    await storage.replaceGuests(event.id, merged.guests);
+    const removedFromQueues = await pruneQueues(
+      storage,
+      event.id,
+      new Set(merged.guests.map((guest) => guest.id)),
+    );
 
+    const importedCount = merged.guests.filter((guest) => guest.origin !== 'manual').length;
     const lastImport = {
       at: new Date().toISOString(),
-      importedCount: guests.length,
+      importedCount,
       skippedWithoutPhone: input.skippedWithoutPhone,
     };
     await storage.putEvent({ ...event, lastImport, updatedAt: lastImport.at });
@@ -364,7 +421,8 @@ const routes: Route[] = [
       status: 200,
       body: {
         ...lastImport,
-        duplicateRowsMerged: input.guests.length - guests.length,
+        duplicateRowsMerged: merged.duplicateRowsMerged,
+        skippedExistingPhones: merged.skippedExistingPhones,
         removedFromQueues,
       },
     };
@@ -419,21 +477,60 @@ const routes: Route[] = [
   route('POST', '/campaigns/:campaignId/calls', async ({ params, body, storage, services }) => {
     const calling = requireCalling(services);
     const campaign = await loadCampaign(storage, params.campaignId!);
-    const { guestId } = parseCallRequestInput(body);
+    const { guestId, openQuestionId } = parseCallRequestInput(body);
 
     const guest = await storage.getGuest(campaign.eventId, guestId);
     if (!guest) throw notFound(`guest not found on this event: ${guestId}`);
 
-    const run = await startRun(calling, campaign, { kind: 'single', guestIds: [guest.id] });
+    if (openQuestionId) await assertOpenQuestion(storage, campaign, guest.id, openQuestionId);
+
+    const run = await startRun(calling, campaign, {
+      kind: 'single',
+      guestIds: [guest.id],
+      waiveRetryCap: openQuestionId !== null,
+    });
     return { status: 202, body: { run } };
   }),
 
-  /** Start the campaign's saved queue. One run at a time, one call at a time. */
-  route('POST', '/campaigns/:campaignId/runs', async ({ params, storage, services }) => {
+  /**
+   * Mark one saved question resolved. The record stays on the attempt.
+   * Placing the follow-up call does not do this.
+   */
+  route(
+    'POST',
+    '/events/:eventId/attempts/:attemptId/questions/:questionId/resolve',
+    async ({ params, storage }) => {
+      const event = await loadEvent(storage, params.eventId!);
+      const attempt = await storage.getAttempt(event.id, params.attemptId!);
+      if (!attempt) throw notFound(`attempt not found: ${params.attemptId}`);
+
+      const questionId = params.questionId!;
+      if (!attempt.openQuestions.some((question) => question.id === questionId)) {
+        throw notFound(`question not found: ${questionId}`);
+      }
+
+      const updated: AttemptRecord = {
+        ...attempt,
+        openQuestions: attempt.openQuestions.map((question) =>
+          question.id === questionId ? { ...question, status: 'resolved' } : question,
+        ),
+      };
+      await storage.putAttempt(updated);
+      return { status: 200, body: { attempt: updated } };
+    },
+  ),
+
+  /**
+   * Start the campaign's saved queue now, or at `startsAt` if that field is set.
+   * A scheduled run dials nothing until then, and stop cancels it.
+   */
+  route('POST', '/campaigns/:campaignId/runs', async ({ params, body, storage, services }) => {
     const calling = requireCalling(services);
     const campaign = await loadCampaign(storage, params.campaignId!);
-
-    const run = await startRun(calling, campaign, { kind: 'queue' });
+    const { startsAt } = parseRunStartInput(body);
+    const run = startsAt
+      ? await scheduleRun(calling, campaign, new Date(startsAt))
+      : await startRun(calling, campaign, { kind: 'queue' });
     return { status: 202, body: { run } };
   }),
 
@@ -487,6 +584,28 @@ const routes: Route[] = [
     return { status: 200, body: { summary: buildSummary(event, guests, campaigns, attempts) } };
   }),
 ];
+
+/**
+ * A follow-up dial is allowed only for a question that is still open on this
+ * guest and campaign. Anything else is an ordinary call and keeps the retry cap.
+ */
+async function assertOpenQuestion(
+  storage: Storage,
+  campaign: CampaignRecord,
+  guestId: string,
+  questionId: string,
+): Promise<void> {
+  const attempts = await storage.listAttempts(campaign.eventId);
+  const open = attempts.some(
+    (attempt) =>
+      attempt.campaignId === campaign.id &&
+      attempt.guestId === guestId &&
+      attempt.openQuestions.some(
+        (question) => question.id === questionId && question.status === 'open',
+      ),
+  );
+  if (!open) throw badRequest('that question is not open for this guest');
+}
 
 /** A queue may only reference guests stored for that event (never a raw number). */
 async function assertQueueGuestsExist(
