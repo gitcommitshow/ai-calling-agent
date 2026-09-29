@@ -116,6 +116,7 @@ describe('PlivoTelephony', () => {
     expect(xml).to.contain('bidirectional="true"');
     expect(xml).to.contain('audio/x-mulaw;rate=8000');
     expect(xml).to.contain(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/telephony/plivo/stream/${ATTEMPT_ID}`);
+    expect(xml).to.contain('<Hangup/>');
 
     // Plivo opens the audio socket and starts streaming the guest.
     const socket = new WebSocket(`${baseUrl.replace('http', 'ws')}/telephony/plivo/stream/${ATTEMPT_ID}`);

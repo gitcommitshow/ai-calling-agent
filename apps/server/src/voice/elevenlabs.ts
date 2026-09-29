@@ -31,6 +31,18 @@ function isQuotaRefusal(status: number, body: string): boolean {
   return /quota|credit|insufficient|limit/i.test(body);
 }
 
+/** Turn an ElevenLabs socket close into an operator-facing error. */
+export function elevenLabsCloseError(code: number, reason: Buffer | string): Error {
+  const detail = typeof reason === 'string' ? reason : reason.toString() || 'no reason';
+  const field = /override for field '([^']+)' is not allowed/i.exec(detail)?.[1];
+  if (field) {
+    return new Error(
+      `elevenlabs rejected the ${field} override: enable ${field} on this agent under Security > Overrides`,
+    );
+  }
+  return new Error(`elevenlabs closed the session (${code}): ${detail}`);
+}
+
 export class ElevenLabsBackend implements VoiceBackendPort {
   readonly backend: VoiceBackend = 'elevenlabs';
 
@@ -153,9 +165,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
       if (closed) return;
       // The runner ends the attempt on the call's own end event, so an early
       // provider close is only an error when the call is still up.
-      ctx.onError(
-        new Error(`elevenlabs closed the session (${code}): ${reason.toString() || 'no reason'}`),
-      );
+      ctx.onError(elevenLabsCloseError(code, reason));
     });
 
     return {

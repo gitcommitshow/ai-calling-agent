@@ -490,7 +490,7 @@ export class CallRunner {
     }
 
     const snapshot = await this.runLiveCall(live);
-    this.log(`attempt ${attemptId} for ${guest.name} ended as ${snapshot.outcome}`);
+    this.log(endedLine(`attempt ${attemptId} for ${guest.name}`, snapshot));
     return { ...identity, ...snapshot };
   }
 
@@ -528,7 +528,7 @@ export class CallRunner {
     });
 
     const snapshot = await this.runLiveCall(live);
-    this.log(`test call ${call.id} ended as ${snapshot.outcome}`);
+    this.log(endedLine(`test call ${call.id}`, snapshot));
     return { ...call, ...snapshot };
   }
 
@@ -845,6 +845,12 @@ export class CallRunner {
       });
     }
   }
+}
+
+/** One log line for a finished attempt or test call, including the error if any. */
+function endedLine(label: string, snapshot: CallSnapshot): string {
+  const error = snapshot.error ? `: ${snapshot.error}` : '';
+  return `${label} ended as ${snapshot.outcome}${error}`;
 }
 
 /** Neutral end reason plus what happened on the call, as a stored outcome. */

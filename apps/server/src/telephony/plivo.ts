@@ -167,7 +167,15 @@ export class PlivoTelephony implements TelephonyPort {
     const session = this.sessions.get(attemptId);
     if (!session) return;
 
-    session.socket?.close();
+    const socket = session.socket;
+    session.socket = null;
+    if (socket) {
+      // Stream is up. Closing it runs the <Hangup/> after <Stream>. A DELETE
+      // here 404s because Plivo has already torn the call down.
+      socket.close();
+      return;
+    }
+
     if (!session.providerCallId) return;
 
     const auth = Buffer.from(`${this.config.authId}:${this.config.authToken}`).toString('base64');
@@ -260,12 +268,13 @@ export class PlivoTelephony implements TelephonyPort {
     res.writeHead(404, { 'content-type': 'text/plain' }).end('unknown plivo callback');
   }
 
-  /** Bidirectional mu-law stream, kept alive so our side controls the hangup. */
+  /** Bidirectional mu-law stream. Hangup is next so teardown is XML-driven. */
   private answerXml(attemptId: string): string {
     return [
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<Response>',
       `<Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000">${escapeXml(this.streamUrl(attemptId))}</Stream>`,
+      '<Hangup/>',
       '</Response>',
     ].join('');
   }
