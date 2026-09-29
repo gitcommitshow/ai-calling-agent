@@ -6,6 +6,7 @@
 import { WebSocket } from 'ws';
 import type { VoiceConfig } from '../config.ts';
 import type { TranscriptTurn, VoiceBackend } from '../storage/types.ts';
+import { fromElevenLabs, parseElevenLabsAudioFormat, toElevenLabs } from './audio.ts';
 import {
   VoiceQuotaError,
   type VoiceBackendPort,
@@ -22,7 +23,11 @@ interface AgentMessage {
   audio_event?: { audio_base_64?: string };
   user_transcription_event?: { user_transcript?: string };
   agent_response_event?: { agent_response?: string };
-  conversation_initiation_metadata_event?: { conversation_id?: string };
+  conversation_initiation_metadata_event?: {
+    conversation_id?: string;
+    agent_output_audio_format?: string;
+    user_input_audio_format?: string;
+  };
   ping_event?: { event_id?: number };
 }
 
@@ -80,12 +85,22 @@ export class ElevenLabsBackend implements VoiceBackendPort {
 
   async start(ctx: VoiceSessionContext): Promise<VoiceSession> {
     const signed = await this.signedUrl();
-    // mu-law at 8 kHz both ways, so no resampling sits between us and the call.
-    const url = `${signed}${signed.includes('?') ? '&' : '?'}input_format=ulaw_8000&output_format=ulaw_8000`;
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(signed);
 
     let conversationId: string | null = null;
     let closed = false;
+    let inputFormat = parseElevenLabsAudioFormat(undefined);
+    let outputFormat = parseElevenLabsAudioFormat(undefined);
+    let formatsReady = false;
+    const queuedGuest: Buffer[] = [];
+
+    /** Forward one telephony frame once we know ElevenLabs's input format. */
+    const sendGuest = (frame: Buffer): void => {
+      if (socket.readyState !== WebSocket.OPEN) return;
+      socket.send(
+        JSON.stringify({ user_audio_chunk: toElevenLabs(frame, inputFormat).toString('base64') }),
+      );
+    };
 
     await new Promise<void>((resolve, reject) => {
       socket.once('open', resolve);
@@ -108,8 +123,11 @@ export class ElevenLabsBackend implements VoiceBackendPort {
     );
 
     ctx.channel.onAudio((frame) => {
-      if (socket.readyState !== WebSocket.OPEN) return;
-      socket.send(JSON.stringify({ user_audio_chunk: frame.toString('base64') }));
+      if (!formatsReady) {
+        queuedGuest.push(frame);
+        return;
+      }
+      sendGuest(frame);
     });
 
     socket.on('message', (raw) => {
@@ -121,13 +139,21 @@ export class ElevenLabsBackend implements VoiceBackendPort {
       }
 
       switch (message.type) {
-        case 'conversation_initiation_metadata':
-          conversationId =
-            message.conversation_initiation_metadata_event?.conversation_id ?? null;
+        case 'conversation_initiation_metadata': {
+          const meta = message.conversation_initiation_metadata_event;
+          conversationId = meta?.conversation_id ?? null;
+          inputFormat = parseElevenLabsAudioFormat(meta?.user_input_audio_format);
+          outputFormat = parseElevenLabsAudioFormat(meta?.agent_output_audio_format);
+          formatsReady = true;
+          for (const frame of queuedGuest) sendGuest(frame);
+          queuedGuest.length = 0;
           break;
+        }
         case 'audio': {
           const payload = message.audio_event?.audio_base_64;
-          if (payload) ctx.channel.send(Buffer.from(payload, 'base64'));
+          if (payload) {
+            ctx.channel.send(fromElevenLabs(Buffer.from(payload, 'base64'), outputFormat));
+          }
           break;
         }
         case 'interruption':

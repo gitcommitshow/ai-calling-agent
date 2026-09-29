@@ -11,7 +11,7 @@ export type CallEndReason = 'completed' | 'busy' | 'no_answer' | 'rejected' | 'f
 
 /**
  * Two-way audio for one answered call. Frames are 8 kHz mu-law, the telephony
- * standard, which the voice backends accept without resampling.
+ * standard. A voice backend transcodes if its provider uses another format.
  */
 export interface AudioChannel {
   /** Guest audio, frame by frame, for as long as the call is up. */

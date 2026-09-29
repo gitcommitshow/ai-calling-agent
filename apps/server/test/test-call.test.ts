@@ -191,10 +191,11 @@ describe('pipeline test calls', () => {
 
   afterEach(async () => {
     if (runner.activeRun) await runner.stopRun(runner.activeRun);
+    await waitFor(async () => runner.activeRun === null, 'the runner to release the live call');
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
-    await rm(dataDir, { recursive: true, force: true });
+    await rm(dataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 });
   });
 
   async function post(path: string, body: unknown): Promise<{ status: number; payload: Record<string, unknown> }> {
