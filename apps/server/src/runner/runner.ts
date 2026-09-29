@@ -798,6 +798,17 @@ export class CallRunner {
           };
           void this.persistLive(live);
         },
+        onAgentEnd: (detail: string) => {
+          if (live.settled) return;
+          // Settle before hangup so a synchronous ended event keeps this reason.
+          live.settle({
+            reason: 'completed',
+            detail,
+            machine: false,
+            error: null,
+          });
+          void this.deps.telephony.hangup(live.attemptId);
+        },
         onError: (error: Error) => {
           if (live.settled) return;
           void this.deps.telephony.hangup(live.attemptId);

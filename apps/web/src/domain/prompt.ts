@@ -147,7 +147,7 @@ export function assemblePrompt(ctx: PromptContext): string {
   }
 
   sections.push(
-    'If the guest is busy or asks to end the call, thank them and hang up. Never invent event details.',
+    'When the guest asks to end the call, or when neither of you has more to add, thank them and end the call. Never invent event details.',
   );
 
   return sections.join('\n\n');

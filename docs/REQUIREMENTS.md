@@ -84,6 +84,9 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ Place an outbound phone call to each selected guest (telephony, STT, TTS, and LLM).
 - Guests may speak English, Hindi, or other local Indian languages.
 - ✓ Run the conversation with the organizer's campaign prompt plus synced event and guest context.
+- ✓ End the call when the guest asks to stop, after a short goodbye.
+- ✓ End the call when the conversation is finished and neither side has more to add, after a short goodbye.
+- ✓ Keep silence and the maximum call length as safety limits for a call that never reaches either close.
 - ✓ Record call outcome: answered, no answer, voicemail, declined, hung up, or failed.
 - ✓ Do not leave voicemail messages in phase 1.
 - ✓ Extract the configured structured fields from the conversation. Use unknown when an answer is unclear.
@@ -136,6 +139,7 @@ Before a campaign dials guests, the organizer can place one test call through th
 - ✓ No answer, voicemail, decline, and hang-up are stored as call outcomes, with captured fields left unknown when not obtained.
 - When a guest's answer is clear and a connected platform supports it, RSVP or attendance is written back, or a sync failure is visible if write-back fails.
 - Phase 1 can complete an outbound call using the phase-1 resources above, including guest speech in English or Hindi.
+- ✓ A pipeline test hangs up after the answerer asks to cut the call, and hangs up on its own once both sides are done, without waiting out the silence limit or the maximum length.
 - ✓ The organizer can list per-guest results and an event summary without listening to the calls.
 - ✓ A guest call never dials a number that was not on the loaded list.
 - ✓ One click on the global test link calls the fixed test number through the same pipeline as a guest call.

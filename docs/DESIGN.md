@@ -68,7 +68,7 @@ flowchart LR
 
 The Plivo adapter translates between this contract and Plivo's world: REST call creation, webhooks, response markup, answering machine detection, and the audio stream message format. Code outside the telephony module never sees a Plivo concept. The provider is picked by configuration, so another adapter (for example Twilio, Exotel, or jambonz) can be added without changing callers.
 
-**Voice backend port (in the server).** A voice backend adapter contract. A backend receives the built prompt, the campaign language, and the two-way audio channel. It runs the conversation, reports transcript turns as they happen, and can report whether it has credits. A credit or quota failure is reported as its own error kind, separate from other failures. Planned backends:
+**Voice backend port (in the server).** A voice backend adapter contract. A backend receives the built prompt, the campaign language, and the two-way audio channel. It runs the conversation, reports transcript turns as they happen, reports when the agent has decided the conversation is over (D14), and can report whether it has credits. A credit or quota failure is reported as its own error kind, separate from other failures. Planned backends:
 
 - **ElevenLabs agent:** bridges the call audio to an ElevenLabs Conversational AI session. This is the quality baseline.
 - **Cascaded:** Google speech-to-text, then an Anthropic or OpenAI LLM, then text-to-speech (Google, or ElevenLabs when credits exist). Our code handles turn-taking. This is the fallback that does not depend on ElevenLabs.
@@ -146,6 +146,13 @@ Org settings (`data/settings.json`) hold one master prompt per campaign type and
 **D13. Pipeline tests are the only request that may carry a phone number (2026-09-28).**
 Guest dials still read the number from storage by guest id. A pipeline test may send `to`, or use the saved `testNumber` in org settings. Test records live in `data/test-calls/`, outside event folders, so guest results and summaries never include them. Tests skip guest guardrails (queue, event timing, calling window, retry cap) but take the same one-call-at-a-time lock as a guest run (D11). A new prompt on a test is stored only on that test record.
 
+**D14. The model decides the close; the server hangs up the phone (2026-09-29).**
+The assembled prompt already says to thank the guest and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, machine detection, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits.
+
+The voice backend reports one end-call signal. The runner lets the goodbye audio finish, then hangs up. ElevenLabs delivers that signal as `agent_tool_response` for the built-in `end_call` system tool (on by default for a dashboard agent; add it under `built_in_tools` for an agent created by API). A per-call prompt override leaves that tool in place. The tool's own instructions cover a completed task, a mutual close, and the guest asking to stop, in whatever language the call is in. The assembled prompt keeps its one-line reminder so every campaign and pipeline test inherits it. Matching phrases in the transcript was rejected, because the same request shows up in many wordings. A provider socket that closes because the agent ended the call is a normal completion. A cascaded backend later gives its LLM the same tool and reports the same signal.
+
+An agent hangup after the guest spoke is stored as `answered`, with the close on the attempt timeline. `SILENCE_SECONDS` and `MAX_CALL_SECONDS` stay as the backstop when the model never signals.
+
 ## Data and control flow
 
 What enters: a Luma CSV, the event details the organizer enters, campaign settings, and the organizer's guest selection and order. During calls: audio from the guest, and call events from the telephony provider.
@@ -161,7 +168,7 @@ A single call:
 3. When the guest answers, the provider opens the audio stream to the server.
 4. The server builds the prompt and starts the first backend with credits.
 5. Transcript turns are saved as they arrive.
-6. When the call ends, the neutral end reason becomes the attempt outcome.
+6. The call ends when the agent closes it (D14), the guest hangs up, or a safety limit fires. The neutral end reason becomes the attempt outcome.
 7. If the call was answered, extraction runs and the captured fields are saved.
 
 The number for a guest call is always read from storage using the guest's id, never taken from a request. Pipeline tests are the exception: they dial the saved test number or a number on that request (D13).
@@ -170,7 +177,8 @@ The number for a guest call is always read from storage using the guest's id, ne
 
 - **Credit or quota failure:** fallback as in D2. Always visible on the attempt and in the run status, never silent.
 - **Dial failure, busy, rejected, no answer, voicemail:** stored as the outcome, with captured fields left unknown. No automatic retry. The organizer retries explicitly, up to the campaign's cap.
-- **Silence:** after `SILENCE_SECONDS` without guest speech, the call is hung up and ends as answered or hung up, depending on whether the guest ever spoke.
+- **Agent close:** when the voice backend reports the conversation is over, the goodbye audio is allowed to finish and the call is hung up (D14). This covers a guest who asks to stop, and a conversation where neither side has more to add.
+- **Silence:** after `SILENCE_SECONDS` without guest speech, and only when the agent never closed the call, the call is hung up and ends as answered or hung up, depending on whether the guest ever spoke.
 - **Call length:** `MAX_CALL_SECONDS` is a hard cap per call, so a stuck conversation can't run forever. A call that is never answered is dropped after `DIAL_TIMEOUT_SECONDS`.
 - **Voice backend failure mid-call:** the call is hung up and the attempt ends as failed, with the backend and its message on the attempt. Automatic fallback to another backend is phase 3 (D2).
 - **Extraction failure:** the transcript is kept, the fields become unknown, and the error is recorded. Extraction can be re-run later.

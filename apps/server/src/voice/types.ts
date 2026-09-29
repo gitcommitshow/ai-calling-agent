@@ -14,6 +14,11 @@ export interface VoiceSessionContext {
   /** Two-way audio for the answered call, already bridged to the guest. */
   channel: AudioChannel;
   onTranscript(turn: TranscriptTurn): void;
+  /**
+   * The agent decided the conversation is over (DESIGN D14). The runner hangs
+   * up. Backends call this only after goodbye audio has had time to play.
+   */
+  onAgentEnd(detail: string): void;
   /** A backend failure mid-conversation. The runner ends the attempt failed. */
   onError(error: Error): void;
 }

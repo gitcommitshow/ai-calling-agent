@@ -1,7 +1,9 @@
 /**
- * ElevenLabs Conversational AI backend. It is an audio bridge, nothing more:
- * guest frames go up, generated frames come back down to the carrier, and the
- * turns it reports are normalized into our transcript shape. No audio is stored.
+ * ElevenLabs Conversational AI backend. It is an audio bridge: guest frames go
+ * up, generated frames come back down to the carrier, and the turns it reports
+ * are normalized into our transcript shape. When the agent invokes the built-in
+ * end_call tool, this bridge waits for that audio to finish and tells the
+ * runner to hang up (DESIGN D14). No audio is stored.
  */
 import { WebSocket } from 'ws';
 import type { VoiceConfig } from '../config.ts';
@@ -16,6 +18,11 @@ import {
 
 const API = 'https://api.elevenlabs.io/v1';
 const LANGUAGE_NAMES: Record<string, string> = { en: 'English', hi: 'Hindi' };
+/** Telephony audio is 8 kHz mu-law: one byte is one sample. */
+const MULAW_HZ = 8000;
+/** Extra wait so the last samples are not clipped when the estimate is short. */
+const GOODBYE_PAD_MS = 400;
+const DEFAULT_END_DETAIL = 'agent ended the call';
 
 /** Provider payloads we read. Everything else in the stream is ignored. */
 interface AgentMessage {
@@ -29,6 +36,107 @@ interface AgentMessage {
     user_input_audio_format?: string;
   };
   ping_event?: { event_id?: number };
+  agent_tool_request?: { tool_name?: string; parameters?: unknown };
+  agent_tool_response?: { tool_name?: string; is_error?: boolean; is_called?: boolean };
+}
+
+/**
+ * How long goodbye audio already sent to the phone still has to play.
+ * Counting every byte from the start of the call would wait out audio the
+ * guest has already heard, so the deadline only moves forward from now.
+ */
+export class GoodbyeDrain {
+  private deadlineMs = 0;
+
+  constructor(
+    private readonly now: () => number,
+    private readonly padMs: number,
+  ) {}
+
+  /** One telephony frame was handed to the carrier. */
+  noteFrame(byteLength: number): void {
+    if (byteLength <= 0) return;
+    const durationMs = Math.ceil((byteLength / MULAW_HZ) * 1000);
+    this.deadlineMs = Math.max(this.deadlineMs, this.now()) + durationMs;
+  }
+
+  /** The carrier dropped its queue, so nothing already sent still has to play. */
+  clear(): void {
+    this.deadlineMs = this.now();
+  }
+
+  /** Milliseconds to wait before hanging up, once the agent has decided. */
+  waitMs(): number {
+    return Math.max(0, this.deadlineMs - this.now()) + this.padMs;
+  }
+}
+
+/** Whether the agent has invoked end_call, and the timeline detail to store. */
+export interface EndCallSignal {
+  ended: boolean;
+  reason: string;
+}
+
+/** A call that has not been closed by the agent yet. */
+export function createEndCallSignal(): EndCallSignal {
+  return { ended: false, reason: DEFAULT_END_DETAIL };
+}
+
+/** Pull a short reason out of an end_call tool request, when the model sent one. */
+function readEndReason(parameters: unknown): string | null {
+  let value = parameters;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (!value || typeof value !== 'object') return null;
+  const reason = (value as { reason?: unknown }).reason;
+  if (typeof reason !== 'string') return null;
+  const trimmed = reason.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, 200);
+}
+
+/**
+ * Record an end_call from one server event. Returns true only on the event
+ * that successfully ends the call. A failed tool, or any other tool, does not.
+ */
+export function noteEndCall(signal: EndCallSignal, message: AgentMessage): boolean {
+  if (signal.ended) return false;
+
+  const request = message.agent_tool_request;
+  if (message.type === 'agent_tool_request' && request && request.tool_name === 'end_call') {
+    const reason = readEndReason(request.parameters);
+    if (reason) signal.reason = `${DEFAULT_END_DETAIL}: ${reason}`;
+    return false;
+  }
+
+  if (message.type !== 'agent_tool_response') return false;
+  const response = message.agent_tool_response;
+  if (response?.tool_name !== 'end_call') return false;
+  if (response.is_error === true || response.is_called === false) {
+    signal.reason = DEFAULT_END_DETAIL;
+    return false;
+  }
+
+  signal.ended = true;
+  return true;
+}
+
+/**
+ * A socket close after the agent ended the call is a normal completion.
+ * Any earlier close is still a backend failure.
+ */
+export function providerCloseError(
+  signal: EndCallSignal,
+  code: number,
+  reason: Buffer | string,
+): Error | null {
+  if (signal.ended) return null;
+  return elevenLabsCloseError(code, reason);
 }
 
 function isQuotaRefusal(status: number, body: string): boolean {
@@ -93,6 +201,19 @@ export class ElevenLabsBackend implements VoiceBackendPort {
     let outputFormat = parseElevenLabsAudioFormat(undefined);
     let formatsReady = false;
     const queuedGuest: Buffer[] = [];
+    const drain = new GoodbyeDrain(() => Date.now(), GOODBYE_PAD_MS);
+    const signal = createEndCallSignal();
+    let drainTimer: NodeJS.Timeout | null = null;
+
+    /** Hang up only after audio already sent to the phone has had time to play. */
+    const scheduleEnd = (): void => {
+      if (drainTimer) clearTimeout(drainTimer);
+      drainTimer = setTimeout(() => {
+        drainTimer = null;
+        if (closed) return;
+        ctx.onAgentEnd(signal.reason);
+      }, drain.waitMs());
+    };
 
     /** Forward one telephony frame once we know ElevenLabs's input format. */
     const sendGuest = (frame: Buffer): void => {
@@ -152,12 +273,17 @@ export class ElevenLabsBackend implements VoiceBackendPort {
         case 'audio': {
           const payload = message.audio_event?.audio_base_64;
           if (payload) {
-            ctx.channel.send(fromElevenLabs(Buffer.from(payload, 'base64'), outputFormat));
+            const frame = fromElevenLabs(Buffer.from(payload, 'base64'), outputFormat);
+            ctx.channel.send(frame);
+            drain.noteFrame(frame.length);
+            if (signal.ended) scheduleEnd();
           }
           break;
         }
         case 'interruption':
           ctx.channel.clear();
+          drain.clear();
+          if (signal.ended) scheduleEnd();
           break;
         case 'ping':
           socket.send(
@@ -180,18 +306,21 @@ export class ElevenLabsBackend implements VoiceBackendPort {
         default:
           break;
       }
+
+      if (noteEndCall(signal, message)) scheduleEnd();
     });
 
     socket.on('error', (error: Error) => {
-      if (closed) return;
+      if (closed || signal.ended) return;
       ctx.onError(error);
     });
 
     socket.on('close', (code: number, reason: Buffer) => {
       if (closed) return;
-      // The runner ends the attempt on the call's own end event, so an early
-      // provider close is only an error when the call is still up.
-      ctx.onError(elevenLabsCloseError(code, reason));
+      // After end_call the provider often closes the socket itself. That is a
+      // normal completion; the drain timer still hangs the phone up.
+      const error = providerCloseError(signal, code, reason);
+      if (error) ctx.onError(error);
     });
 
     return {
@@ -200,6 +329,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
       },
       close: async () => {
         closed = true;
+        if (drainTimer) clearTimeout(drainTimer);
         if (socket.readyState === WebSocket.OPEN) socket.close();
       },
     };

@@ -76,6 +76,7 @@ const silentChannel: AudioChannel = { onAudio: () => {}, send: () => {}, clear: 
 class FakeCarrier implements TelephonyPort {
   readonly provider = 'fake-carrier';
   readonly dialed: string[] = [];
+  readonly hungUp: string[] = [];
   readonly refuse = new Set<string>();
 
   private readonly listeners: ((event: TelephonyEvent) => void)[] = [];
@@ -104,6 +105,7 @@ class FakeCarrier implements TelephonyPort {
   }
 
   async hangup(attemptId: string): Promise<void> {
+    this.hungUp.push(attemptId);
     this.endCall(attemptId);
   }
 
@@ -168,11 +170,11 @@ describe('CallRunner', () => {
     await rm(dataDir, { recursive: true, force: true });
   });
 
-  function buildRunner(): CallRunner {
+  function buildRunner(voiceBackend: VoiceBackendPort = voice): CallRunner {
     return new CallRunner({
       storage: store,
       telephony,
-      voice,
+      voice: voiceBackend,
       extraction: { provider: 'fake-llm', extract },
       limits: LIMITS,
       now: () => NOW,
@@ -273,4 +275,42 @@ describe('CallRunner', () => {
     expect(failed?.capturedFields).to.deep.equal({ will_attend: 'unknown' });
     expect(extract.called).to.equal(false);
   });
+
+  it('hangs up when the agent ends the conversation', async () => {
+    const asha = guest('asha', '+919876543210');
+    const campaign = campaignFor([asha.id]);
+    await store.replaceGuests(event.id, [asha]);
+    await store.putCampaign(campaign);
+
+    const runner = buildRunner(new AgentEndsVoice());
+    const started = await runner.startRun(campaign, { kind: 'queue' });
+    await waitFor(
+      async () => (await store.getRun(event.id, started.id))?.status === 'completed',
+      'the run to complete',
+    );
+
+    const [attempt] = await store.listAttempts(event.id);
+    expect(attempt?.outcome).to.equal('answered');
+    expect(attempt?.error).to.equal(null);
+    expect(attempt?.timeline.find((step) => step.kind === 'call_ended')?.detail).to.include(
+      'agent ended the call: user asked to end',
+    );
+    expect(telephony.hungUp).to.have.lengthOf(1);
+  });
 });
+
+/** Voice backend that closes the call itself instead of waiting for the guest. */
+class AgentEndsVoice implements VoiceBackendPort {
+  readonly backend = 'elevenlabs' as const;
+
+  async hasCredits(): Promise<boolean> {
+    return true;
+  }
+
+  async start(ctx: VoiceSessionContext) {
+    const at = NOW.toISOString();
+    ctx.onTranscript({ role: 'guest', text: 'Please cut the call.', at });
+    ctx.onAgentEnd('agent ended the call: user asked to end');
+    return { sessionId: `sess-${ctx.attemptId}`, close: async () => {} };
+  }
+}
