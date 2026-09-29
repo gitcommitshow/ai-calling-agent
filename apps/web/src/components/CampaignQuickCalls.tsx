@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
+import { summarizeSkips } from '../domain/run-skips';
 import { formatInZone, isoToZonedInput, zonedInputToIso } from '../lib/time';
 import { LIVE_RUN_STATUSES, type Campaign, type Run } from '../domain/types';
 
@@ -110,6 +111,9 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
       const payload = (await response.json()) as { run?: Run; error?: string };
       if (!response.ok || !payload.run) throw new Error(payload.error ?? failure);
       setOverrides((current) => ({ ...current, [campaign.id]: payload.run! }));
+      // A run that only skips (outside the window, retry cap) is already
+      // finished in this response, so the live poll never sees it.
+      if (!isOpen(payload.run)) router.refresh();
     } catch (postError) {
       setErrors((current) => ({ ...current, [campaign.id]: (postError as Error).message }));
     } finally {
@@ -236,6 +240,12 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
                   </div>
                 ) : null}
               </div>
+              {run && run.skipped.length > 0 ? (
+                <p className="status-line blocked queue-bar-error">
+                  <Icon name="ban" />
+                  <span>{summarizeSkips(run.skipped).join('. ')}</span>
+                </p>
+              ) : null}
               {error ? (
                 <p className="notice error small queue-bar-error">
                   <Icon name="alert" /> {error}

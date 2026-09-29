@@ -8,7 +8,7 @@
  */
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CampaignQuickCalls } from './CampaignQuickCalls';
 import { Icon } from './Icon';
 import { APPROVAL_STATUS_ICONS } from './status-icons';
@@ -18,6 +18,7 @@ import {
   countAttemptsByGuest,
   type Eligibility,
 } from '../domain/eligibility';
+import { latestSkipByGuest } from '../domain/run-skips';
 import { buildQueue, filterGuests, moveInQueue, ticketNamesOf } from '../domain/filter-order';
 import { formatIndianPhone } from '../domain/phone';
 import {
@@ -85,7 +86,14 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
   }, [addedCampaigns, campaigns]);
 
   const campaign = knownCampaigns.find((candidate) => candidate.id === campaignId);
-  const now = useMemo(() => new Date(nowIso), [nowIso]);
+  // The page snapshot goes stale if it stays open past the calling window.
+  const [now, setNow] = useState(() => new Date(nowIso));
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    tick();
+    const timer = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const ticketNames = useMemo(() => ticketNamesOf(guests), [guests]);
 
   /**
@@ -124,6 +132,11 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
   const queuePosition = useMemo(
     () => new Map(queue.map((guestId, index) => [guestId, index + 1])),
     [queue],
+  );
+
+  const skippedOnLatestRun = useMemo(
+    () => (campaign ? latestSkipByGuest(runs, campaign.id) : new Map<string, string>()),
+    [campaign, runs],
   );
 
   function toggleStatus(status: ApprovalStatus) {
@@ -302,6 +315,8 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
     const state = eligibility.get(guest.id);
     const savedInQueue = campaign?.queue.includes(guest.id) ?? false;
     const callResult = callResults[guest.id];
+    const skipReason = skippedOnLatestRun.get(guest.id);
+    const skipAlreadyShown = skipReason !== undefined && skipReason === state?.reason;
     const callBlockedBy = !state?.eligible
       ? (state?.reason ?? 'pick a campaign')
       : !savedInQueue
@@ -367,6 +382,15 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
             <span>Eligible once the queue is saved</span>
           </p>
         )}
+
+        {skipReason && !skipAlreadyShown ? (
+          <p className="status-line blocked">
+            <Icon name="ban" />
+            <span>
+              {state?.eligible ? `Last run skipped: ${skipReason}` : `Not called: ${skipReason}`}
+            </span>
+          </p>
+        ) : null}
 
         {callResult ? (
           <p className="status-line">
