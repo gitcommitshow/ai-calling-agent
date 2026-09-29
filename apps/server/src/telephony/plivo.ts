@@ -50,6 +50,22 @@ function formBody(body: string): Record<string, string> {
   return fields;
 }
 
+/**
+ * String Plivo HMAC-SHA256s for a POST callback: callback URL, then `?` plus
+ * sorted name+value pairs, then `.` plus the nonce.
+ */
+export function plivoV3PostPayload(
+  uri: string,
+  nonce: string,
+  fields: Record<string, string>,
+): string {
+  const pairs = Object.keys(fields)
+    .sort()
+    .map((key) => `${key}${fields[key] ?? ''}`)
+    .join('');
+  return pairs.length > 0 ? `${uri}?${pairs}.${nonce}` : `${uri}.${nonce}`;
+}
+
 async function readBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
@@ -162,11 +178,16 @@ export class PlivoTelephony implements TelephonyPort {
   }
 
   /**
-   * Verify Plivo's V3 callback signature over the URL we handed them plus the
-   * nonce. The URL is rebuilt from our own configuration, so a spoofed
-   * forwarding header cannot change what gets signed.
+   * Verify Plivo's V3 callback signature over the URL we handed them, the POST
+   * fields, and the nonce. The URL is rebuilt from our own configuration, so a
+   * spoofed forwarding header cannot change what gets signed.
    */
-  private signatureValid(req: IncomingMessage, url: URL): boolean {
+  private signatureValid(
+    req: IncomingMessage,
+    kind: string,
+    attemptId: string,
+    fields: Record<string, string>,
+  ): boolean {
     if (!this.config.verifySignature) return true;
 
     const header = req.headers['x-plivo-signature-v3'];
@@ -174,7 +195,7 @@ export class PlivoTelephony implements TelephonyPort {
     if (typeof header !== 'string' || typeof nonce !== 'string') return false;
 
     const expected = createHmac('sha256', this.config.authToken)
-      .update(`${this.publicBaseUrl}${url.pathname}.${nonce}`)
+      .update(plivoV3PostPayload(this.callbackUrl(kind, attemptId), nonce, fields))
       .digest('base64');
     const expectedBytes = Buffer.from(expected);
 
@@ -190,24 +211,21 @@ export class PlivoTelephony implements TelephonyPort {
     const [, , , kind, rawAttemptId] = url.pathname.split('/');
     if (!kind || !rawAttemptId || kind === 'stream') return false;
 
-    void this.respond(req, res, url, kind, decodeURIComponent(rawAttemptId));
+    void this.respond(req, res, kind, decodeURIComponent(rawAttemptId));
     return true;
   }
 
   private async respond(
     req: IncomingMessage,
     res: ServerResponse,
-    url: URL,
     kind: string,
     attemptId: string,
   ): Promise<void> {
-    const body = await readBody(req);
-    if (!this.signatureValid(req, url)) {
+    const fields = formBody(await readBody(req));
+    if (!this.signatureValid(req, kind, attemptId, fields)) {
       res.writeHead(403, { 'content-type': 'text/plain' }).end('invalid plivo signature');
       return;
     }
-
-    const fields = formBody(body);
     const session = this.sessions.get(attemptId);
     if (session && !session.providerCallId && fields.CallUUID) {
       session.providerCallId = fields.CallUUID;

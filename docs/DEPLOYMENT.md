@@ -100,7 +100,7 @@ The fake carrier answers immediately and the fake backend speaks a scripted exch
 Plivo has to reach the server, so it needs a public https origin. Locally that means a tunnel to the API port.
 
 1. Start a tunnel to the server port and copy the https URL it gives you.
-2. Set `PUBLIC_BASE_URL` to exactly that origin, with no trailing slash. The Plivo signature is `PUBLIC_BASE_URL + pathname + nonce`, so a mismatch shows up as 403 on every callback.
+2. Set `PUBLIC_BASE_URL` to exactly that origin, with no trailing slash. The Plivo signature is checked against that origin plus the POST body, so a mismatch shows up as 403 on every callback.
 3. Set the Plivo, ElevenLabs, and extraction variables from [Where to copy each value](#where-to-copy-each-value).
 4. Restart the server and check `GET /health` reports `calling.ready`.
 5. Place one call to your own number from a campaign page, or the pipeline test page, before running a queue.

@@ -5,13 +5,23 @@
  */
 import { expect } from 'chai';
 import sinon from 'sinon';
+import { createHmac } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { WebSocket } from 'ws';
-import { PlivoTelephony } from '../src/telephony/plivo.ts';
+import { PlivoTelephony, plivoV3PostPayload } from '../src/telephony/plivo.ts';
 import type { AudioChannel, TelephonyEvent } from '../src/telephony/types.ts';
 
 const ATTEMPT_ID = '20261005103000-aaaaaaaa';
+const AUTH_TOKEN = 'test-token';
+const SIGN_NONCE = 'test-nonce';
+
+/** HMAC Plivo would send for a POST callback in these tests. */
+function signV3(url: string, fields: Record<string, string>): string {
+  return createHmac('sha256', AUTH_TOKEN)
+    .update(plivoV3PostPayload(url, SIGN_NONCE, fields))
+    .digest('base64');
+}
 
 async function waitFor(check: () => boolean, label: string): Promise<void> {
   for (let tries = 0; tries < 200; tries += 1) {
@@ -45,8 +55,7 @@ describe('PlivoTelephony', () => {
         authId: 'MAXXXXXXXXXXXXXXXXXX',
         authToken: 'test-token',
         callerId: '+911140000000',
-        // Signature checks are covered by config; this drives the translation.
-        verifySignature: false,
+        verifySignature: true,
       },
       baseUrl,
     );
@@ -81,10 +90,18 @@ describe('PlivoTelephony', () => {
     fetchStub.restore();
   }
 
-  function callback(kind: string, fields: Record<string, string>) {
-    return fetch(`${baseUrl}/telephony/plivo/${kind}/${ATTEMPT_ID}`, {
+  function callback(kind: string, fields: Record<string, string>, signature?: string | null) {
+    const url = `${baseUrl}/telephony/plivo/${kind}/${ATTEMPT_ID}`;
+    const headers: Record<string, string> = {
+      'content-type': 'application/x-www-form-urlencoded',
+    };
+    if (signature !== null) {
+      headers['X-Plivo-Signature-V3'] = signature ?? signV3(url, fields);
+      headers['X-Plivo-Signature-V3-Nonce'] = SIGN_NONCE;
+    }
+    return fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers,
       body: new URLSearchParams(fields).toString(),
     });
   }
@@ -147,5 +164,28 @@ describe('PlivoTelephony', () => {
     const ended = events.filter((event) => event.kind === 'ended');
     expect(ended).to.have.lengthOf(1);
     expect(ended[0]).to.include({ reason: 'completed', detail: 'NORMAL_CLEARING' });
+  });
+
+  it('builds the V3 POST payload the same way Plivo signs it', () => {
+    expect(
+      plivoV3PostPayload('https://calls.example.com/telephony/plivo/answer/a1', 'n1', {
+        CallUUID: 'cu-1',
+        CallStatus: 'in-progress',
+        To: '+91',
+      }),
+    ).to.equal(
+      'https://calls.example.com/telephony/plivo/answer/a1?CallStatusin-progressCallUUIDcu-1To+91.n1',
+    );
+  });
+
+  it('rejects a callback whose V3 signature is missing or does not match', async () => {
+    await dial();
+
+    const unsigned = await callback('answer', { CallUUID: 'cu-1' }, null);
+    expect(unsigned.status).to.equal(403);
+    expect(await unsigned.text()).to.equal('invalid plivo signature');
+
+    const forged = await callback('answer', { CallUUID: 'cu-1' }, 'not-a-real-signature');
+    expect(forged.status).to.equal(403);
   });
 });
