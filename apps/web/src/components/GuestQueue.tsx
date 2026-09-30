@@ -347,7 +347,8 @@ export function GuestQueue({
     const savedInQueue = campaign?.queue.includes(guest.id) ?? false;
     const callResult = callResults[guest.id];
     const skipReason = skippedOnLatestRun.get(guest.id);
-    const skipAlreadyShown = skipReason !== undefined && skipReason === state?.reason;
+    const skipAlreadyShown =
+      skipReason !== undefined && state?.eligible === false && skipReason === state.reason;
     const outsideWindow =
       state?.eligible === false && state.reason.startsWith('outside the calling window');
     const callBlockedBy =
@@ -508,6 +509,13 @@ export function GuestQueue({
         campaigns={knownCampaigns}
         runs={runs}
         callingHoursMode={callingHoursMode}
+        onQueueCleared={(id) => {
+          if (id !== campaignId) return;
+          setQueue([]);
+          const name = knownCampaigns.find((item) => item.id === id)?.name ?? 'this campaign';
+          setMessage(`Removed the queue for ${name}. The campaign is still here.`);
+          setError(null);
+        }}
       />
       <div className="grid">
         <div>

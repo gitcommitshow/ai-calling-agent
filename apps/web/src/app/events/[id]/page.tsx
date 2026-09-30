@@ -10,6 +10,7 @@ import { GuestImport } from '../../../components/GuestImport';
 import { GuestQueue } from '../../../components/GuestQueue';
 import { Icon } from '../../../components/Icon';
 import { OutsideHoursGate } from '../../../components/OutsideHoursGate';
+import { RemoveQueueGate } from '../../../components/RemoveQueueGate';
 import {
   getEvent,
   listAttempts,
@@ -34,6 +35,7 @@ export default async function EventPage({
     guest?: string;
     startsAt?: string;
     callError?: string;
+    removeQueue?: string;
   }>;
 }) {
   const { id } = await params;
@@ -57,9 +59,13 @@ export default async function EventPage({
 
     const confirmed = campaigns.find((campaign) => campaign.id === query.confirm);
     const gateStep = query.step === '2' ? '2' : query.step === '1' ? '1' : null;
+    const removing = campaigns.find(
+      (campaign) => campaign.id === query.removeQueue && campaign.queue.length > 0,
+    );
 
     return (
       <div className="stack">
+        {removing ? <RemoveQueueGate eventId={event.id} campaign={removing} /> : null}
         {confirmed && gateStep ? (
           <OutsideHoursGate
             eventId={event.id}

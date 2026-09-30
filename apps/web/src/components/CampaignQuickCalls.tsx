@@ -14,6 +14,7 @@ import {
   OutsideWindowNotice,
   type OutsideWindowStep,
 } from './OutsideWindowConfirm';
+import { RemoveQueueConfirm } from './RemoveQueueConfirm';
 import { isWithinCallingWindow } from '../domain/eligibility';
 import type { CallingHoursMode } from '../domain/settings';
 import { summarizeSkips } from '../domain/run-skips';
@@ -31,6 +32,8 @@ interface Props {
   runs: Run[];
   /** Strict refuses outside-hours dials. Soft opens the two-step confirmation. */
   callingHoursMode?: CallingHoursMode;
+  /** The saved queue was emptied. The event page uses this to clear its checkboxes. */
+  onQueueCleared?: (campaignId: string) => void;
 }
 
 type PendingAction =
@@ -54,15 +57,20 @@ export function CampaignQuickCalls({
   campaigns,
   runs,
   callingHoursMode = 'soft',
+  onQueueCleared,
 }: Props) {
   const router = useRouter();
-  const ready = campaigns.filter((campaign) => campaign.queue.length > 0);
+  const [clearedIds, setClearedIds] = useState<string[]>([]);
+  const ready = campaigns.filter(
+    (campaign) => campaign.queue.length > 0 && !clearedIds.includes(campaign.id),
+  );
   const [overrides, setOverrides] = useState<Record<string, Run>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [minByZone, setMinByZone] = useState<Record<string, string>>({});
   const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
 
   useEffect(() => {
@@ -189,6 +197,30 @@ export function CampaignQuickCalls({
     );
   }
 
+  /** Drop a saved queue that has not started, so it is no longer waiting to be called. */
+  async function clearQueue(campaign: Campaign) {
+    setBusyId(campaign.id);
+    setErrors((current) => ({ ...current, [campaign.id]: '' }));
+    try {
+      const response = await fetch(`/api/campaigns/${campaign.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queue: [] }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'could not remove the queue');
+      setClearedIds((current) => [...current, campaign.id]);
+      setRemovingId(null);
+      onQueueCleared?.(campaign.id);
+      router.refresh();
+    } catch (clearError) {
+      setRemovingId(null);
+      setErrors((current) => ({ ...current, [campaign.id]: (clearError as Error).message }));
+    } finally {
+      setBusyId((current) => (current === campaign.id ? null : current));
+    }
+  }
+
   async function stop(campaignId: string, run: Run) {
     setBusyId(campaignId);
     setErrors((current) => ({ ...current, [campaignId]: '' }));
@@ -211,6 +243,9 @@ export function CampaignQuickCalls({
   const pendingCampaign = pending
     ? ready.find((campaign) => campaign.id === pending.campaignId)
     : undefined;
+  const removingCampaign = removingId
+    ? campaigns.find((campaign) => campaign.id === removingId)
+    : undefined;
   const anyOutside = ready.some(
     (campaign) => barTone(runFor(campaign.id)) === 'pending' && !isWithinCallingWindow(now, campaign.callingWindow),
   );
@@ -224,6 +259,16 @@ export function CampaignQuickCalls({
         <OutsideWindowNotice
           window={ready.find((c) => !isWithinCallingWindow(now, c.callingWindow))!.callingWindow}
           mode={callingHoursMode}
+        />
+      ) : null}
+      {removingCampaign ? (
+        <RemoveQueueConfirm
+          campaignName={removingCampaign.name}
+          busy={busyId === removingCampaign.id}
+          onCancel={() => {
+            if (busyId !== removingCampaign.id) setRemovingId(null);
+          }}
+          onConfirm={() => void clearQueue(removingCampaign)}
         />
       ) : null}
       {pendingCampaign ? (
@@ -246,11 +291,31 @@ export function CampaignQuickCalls({
           const timeZone = campaign.callingWindow.timezone;
           const error = errors[campaign.id];
           const count = `${campaign.queue.length} queued`;
-          const gating = outsideStep !== 'idle';
+          const gating = outsideStep !== 'idle' || removingId !== null;
 
           return (
             <li key={campaign.id}>
               <div className={`queue-bar ${tone}`}>
+                {tone === 'pending' ? (
+                  <form
+                    method="get"
+                    action={`/events/${eventId}`}
+                    onSubmit={(formEvent) => {
+                      formEvent.preventDefault();
+                      setRemovingId(campaign.id);
+                    }}
+                  >
+                    <input type="hidden" name="removeQueue" value={campaign.id} />
+                    <button
+                      type="submit"
+                      className="icon-action"
+                      aria-label={`Remove ${campaign.name} queue`}
+                      disabled={busy || gating}
+                    >
+                      <Icon name="xCircle" />
+                    </button>
+                  </form>
+                ) : null}
                 <Link href={`/events/${eventId}/campaigns/${campaign.id}`} className="queue-bar-name truncate">
                   {campaign.name}
                 </Link>

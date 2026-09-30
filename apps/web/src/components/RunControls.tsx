@@ -13,6 +13,7 @@ import {
   OutsideWindowNotice,
   type OutsideWindowStep,
 } from './OutsideWindowConfirm';
+import { RemoveQueueConfirm } from './RemoveQueueConfirm';
 import { isWithinCallingWindow } from '../domain/eligibility';
 import type { CallingHoursMode } from '../domain/settings';
 import { formatInZone, isoToZonedInput, zonedInputToIso } from '../lib/time';
@@ -50,6 +51,7 @@ export function RunControls({ campaign, guests, initialRun, callingHoursMode = '
   const [error, setError] = useState<string | null>(null);
   const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
   const [pending, setPending] = useState<PendingStart | null>(null);
+  const [confirmRemove, setConfirmRemove] = useState(false);
   const [now, setNow] = useState(() => new Date());
   const timeZone = campaign.callingWindow.timezone;
   const outsideNow = !isWithinCallingWindow(now, campaign.callingWindow);
@@ -172,6 +174,28 @@ export function RunControls({ campaign, guests, initialRun, callingHoursMode = '
     );
   }
 
+  /** Empty the saved queue while nothing is scheduled or dialing. */
+  async function removeQueue() {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaign.id}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ queue: [] }),
+      });
+      const payload = (await response.json()) as { error?: string };
+      if (!response.ok) throw new Error(payload.error ?? 'could not remove the queue');
+      setConfirmRemove(false);
+      router.refresh();
+    } catch (removeError) {
+      setConfirmRemove(false);
+      setError((removeError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function stop(path: string, failure: string) {
     setBusy(true);
     setError(null);
@@ -198,6 +222,17 @@ export function RunControls({ campaign, guests, initialRun, callingHoursMode = '
         <OutsideWindowNotice window={campaign.callingWindow} mode={callingHoursMode} />
       ) : null}
 
+      {confirmRemove ? (
+        <RemoveQueueConfirm
+          campaignName={campaign.name}
+          busy={busy}
+          onCancel={() => {
+            if (!busy) setConfirmRemove(false);
+          }}
+          onConfirm={() => void removeQueue()}
+        />
+      ) : null}
+
       <OutsideWindowConfirm
         window={campaign.callingWindow}
         step={outsideStep}
@@ -210,7 +245,27 @@ export function RunControls({ campaign, guests, initialRun, callingHoursMode = '
       />
 
       <div className="toolbar-split">
-        <span className="small muted">
+        <span className="small muted queue-count">
+          {!live && !scheduled && campaign.queue.length > 0 ? (
+            <form
+              method="get"
+              action={`/events/${campaign.eventId}`}
+              onSubmit={(formEvent) => {
+                formEvent.preventDefault();
+                setConfirmRemove(true);
+              }}
+            >
+              <input type="hidden" name="removeQueue" value={campaign.id} />
+              <button
+                type="submit"
+                className="icon-action"
+                aria-label={`Remove ${campaign.name} queue`}
+                disabled={busy || outsideStep !== 'idle' || confirmRemove}
+              >
+                <Icon name="xCircle" />
+              </button>
+            </form>
+          ) : null}
           <Icon name="users" /> {campaign.queue.length} guests in the saved queue
         </span>
         <div className="toolbar">

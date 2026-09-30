@@ -1,0 +1,10 @@
+---
+description: UX taste
+alwaysApply: true
+---
+
+# UX taste
+
+- Keep a destructive action away and clearly distinguishable from the action people use most. e.g. Do not place Remove next to Schedule, or Delete next to Save.
+- Confirm before a destructive action. The first click asks. The second click does it.
+- Icon controls are the glyph only. No filled button behind them. A dark or solid background on an icon makes a quiet control look like a primary button.

@@ -785,12 +785,33 @@ th {
   color: var(--text);
 }
 
-.queue-bar button.icon-action {
+button.icon-action {
   width: 2rem;
   height: 2rem;
   padding: 0;
   justify-content: center;
   flex: 0 0 auto;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+}
+
+button.icon-action:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  opacity: 0.7;
+}
+
+.queue-bar > form,
+.queue-count form {
+  display: contents;
+}
+
+.queue-count {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .queue-bar button.stop-action {
