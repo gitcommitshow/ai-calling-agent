@@ -247,6 +247,11 @@ export interface RunRecord {
   skipped: SkippedGuest[];
   /** When true, this run is a follow-up on an open question and skips the retry cap. */
   waiveRetryCap: boolean;
+  /**
+   * When true, the organizer double-confirmed dialing outside calling hours.
+   * Event timing rules still apply.
+   */
+  waiveCallingWindow: boolean;
   /** When dialing should begin. Null when the organizer started the run immediately. */
   scheduledFor: string | null;
   startedAt: string;

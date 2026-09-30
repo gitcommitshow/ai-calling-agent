@@ -48,6 +48,11 @@ export interface ServerConfig {
   voice: VoiceConfig;
   extraction: ExtractionConfig;
   limits: CallLimits;
+  /**
+   * When true, a dial outside calling hours is refused even after the organizer
+   * confirms the risk. Set with STRICT_CALLING_HOURS.
+   */
+  strictCallingHours: boolean;
 }
 
 function text(value: string | undefined, fallback = ''): string {
@@ -118,6 +123,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       silenceSeconds: positiveInt(env.SILENCE_SECONDS, 20),
       dialTimeoutSeconds: positiveInt(env.DIAL_TIMEOUT_SECONDS, 45),
     },
+    strictCallingHours: boolean(env.STRICT_CALLING_HOURS, false),
   };
 }
 

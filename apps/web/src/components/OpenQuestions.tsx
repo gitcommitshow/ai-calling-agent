@@ -3,10 +3,17 @@
 /**
  * Questions a call could not answer. Each one can start a follow-up call or be
  * marked resolved once a person has answered it. Calling does not resolve it.
+ * Outside calling hours needs the same double confirmation as other dials.
  */
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Icon } from './Icon';
+import {
+  OutsideWindowConfirm,
+  type OutsideWindowStep,
+} from './OutsideWindowConfirm';
+import type { CallingHoursMode } from '../domain/settings';
+import type { CallingWindow } from '../domain/types';
 
 export interface OpenQuestionRow {
   questionId: string;
@@ -18,24 +25,68 @@ export interface OpenQuestionRow {
   guestId: string;
 }
 
-export function OpenQuestions({ eventId, rows }: { eventId: string; rows: OpenQuestionRow[] }) {
+/** Pull hours out of a server refusal so the confirm dialog can name them. */
+function windowFromRefusal(message: string): CallingWindow | null {
+  const match = message.match(
+    /outside the calling window \((\d{2}:\d{2})-(\d{2}:\d{2}) ([^)]+)\)/i,
+  );
+  if (!match) return null;
+  return { start: match[1]!, end: match[2]!, timezone: match[3]! };
+}
+
+export function OpenQuestions({
+  eventId,
+  rows,
+  callingHoursMode = 'soft',
+}: {
+  eventId: string;
+  rows: OpenQuestionRow[];
+  /** Strict refuses outside-hours dials. Soft opens the two-step confirmation. */
+  callingHoursMode?: CallingHoursMode;
+}) {
   const router = useRouter();
   const [busyId, setBusyId] = useState<string | null>(null);
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
+  const [pending, setPending] = useState<{
+    row: OpenQuestionRow;
+    window: CallingWindow;
+    strict: boolean;
+  } | null>(null);
 
   if (rows.length === 0) return null;
 
-  async function callBack(row: OpenQuestionRow) {
+  async function callBack(row: OpenQuestionRow, waiveCallingWindow = false) {
     setBusyId(row.questionId);
     setNotes((current) => ({ ...current, [row.questionId]: 'Starting the call...' }));
     try {
       const response = await fetch(`/api/campaigns/${row.campaignId}/calls`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ guestId: row.guestId, openQuestionId: row.questionId }),
+        body: JSON.stringify({
+          guestId: row.guestId,
+          openQuestionId: row.questionId,
+          ...(waiveCallingWindow ? { waiveCallingWindow: true } : {}),
+        }),
       });
       const payload = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(payload.error ?? 'the call was refused');
+      if (!response.ok) {
+        const message = payload.error ?? 'the call was refused';
+        const window = !waiveCallingWindow ? windowFromRefusal(message) : null;
+        if (window) {
+          setPending({
+            row,
+            window,
+            strict: callingHoursMode === 'strict' || message.includes('STRICT_CALLING_HOURS'),
+          });
+          setOutsideStep('ack');
+          setNotes((current) => ({ ...current, [row.questionId]: message }));
+          return;
+        }
+        throw new Error(message);
+      }
+      setOutsideStep('idle');
+      setPending(null);
       setNotes((current) => ({
         ...current,
         [row.questionId]: `Calling ${row.guestName}. This question stays open until you mark it answered.`,
@@ -72,6 +123,21 @@ export function OpenQuestions({ eventId, rows }: { eventId: string; rows: OpenQu
         The call did not have these answers. Call the guest, then mark the question resolved once
         you have answered it.
       </p>
+      {pending ? (
+        <OutsideWindowConfirm
+          window={pending.window}
+          step={outsideStep}
+          busy={busyId === pending.row.questionId}
+          mode={pending.strict ? 'strict' : 'soft'}
+          confirmLabel="Call anyway"
+          onAck={() => setOutsideStep('final')}
+          onConfirm={() => void callBack(pending.row, true)}
+          onCancel={() => {
+            setOutsideStep('idle');
+            setPending(null);
+          }}
+        />
+      ) : null}
       <div className="card-grid">
         {rows.map((row) => (
           <article key={row.questionId} className="entity-card">
@@ -92,8 +158,8 @@ export function OpenQuestions({ eventId, rows }: { eventId: string; rows: OpenQu
               <button
                 type="button"
                 className="tiny"
-                disabled={busyId === row.questionId}
-                onClick={() => callBack(row)}
+                disabled={busyId === row.questionId || outsideStep !== 'idle'}
+                onClick={() => void callBack(row)}
               >
                 <Icon name="phone" /> Call {row.guestName}
               </button>
@@ -101,7 +167,7 @@ export function OpenQuestions({ eventId, rows }: { eventId: string; rows: OpenQu
                 type="button"
                 className="secondary tiny"
                 disabled={busyId === row.questionId}
-                onClick={() => resolve(row)}
+                onClick={() => void resolve(row)}
               >
                 <Icon name="check" /> Mark answered
               </button>

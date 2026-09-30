@@ -1,9 +1,11 @@
 /**
  * Default campaign templates. These are product decisions, so they live in the
  * web app: the server only stores whatever campaign it is handed. Field sets are
- * a starting point and stay editable per campaign.
+ * a starting point and stay editable per campaign. Calling hours and retry cap
+ * come from org settings when those are passed in.
  */
-import type { CampaignType, CaptureField, Language, VoiceBackend } from './types';
+import type { OrgSettings } from './settings';
+import type { CallingWindow, CampaignType, CaptureField, Language, VoiceBackend } from './types';
 
 export interface CampaignTemplate {
   type: CampaignType;
@@ -14,13 +16,22 @@ export interface CampaignTemplate {
   purpose: string;
   language: Language;
   fields: CaptureField[];
-  callingWindow: { start: string; end: string; timezone: string };
+  callingWindow: CallingWindow;
   retryCap: number;
   voiceBackendOrder: VoiceBackend[];
   queue: string[];
 }
 
-const DEFAULT_WINDOW = { start: '10:00', end: '20:00', timezone: 'Asia/Kolkata' };
+export interface CampaignTemplateDefaults {
+  callingWindow: CallingWindow;
+  retryCap: number;
+}
+
+const FALLBACK_DEFAULTS: CampaignTemplateDefaults = {
+  callingWindow: { start: '10:00', end: '20:00', timezone: 'Asia/Kolkata' },
+  retryCap: 1,
+};
+
 const DEFAULT_BACKEND_ORDER: VoiceBackend[] = ['elevenlabs', 'cascaded'];
 
 const PRE_EVENT_PROMPT = `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}.
@@ -34,7 +45,21 @@ const POST_EVENT_PROMPT = `You are calling {{guest.firstName}} on behalf of the 
 Thank them, confirm whether they made it, and ask for one piece of feedback. If they ask about the event, answer from the event brief.
 Keep the call under two minutes and stay polite if they want to end it.`;
 
-export function campaignTemplates(): CampaignTemplate[] {
+/** Defaults new campaigns copy from org settings, with a safe fallback. */
+export function templateDefaultsFromSettings(
+  settings?: Pick<OrgSettings, 'callingWindow' | 'retryCap'> | null,
+): CampaignTemplateDefaults {
+  if (!settings) return { ...FALLBACK_DEFAULTS, callingWindow: { ...FALLBACK_DEFAULTS.callingWindow } };
+  return {
+    callingWindow: { ...settings.callingWindow },
+    retryCap: settings.retryCap,
+  };
+}
+
+export function campaignTemplates(
+  settings?: Pick<OrgSettings, 'callingWindow' | 'retryCap'> | null,
+): CampaignTemplate[] {
+  const defaults = templateDefaultsFromSettings(settings);
   return [
     {
       type: 'pre-event',
@@ -51,8 +76,8 @@ export function campaignTemplates(): CampaignTemplate[] {
           options: ['yes', 'no', 'maybe'],
         },
       ],
-      callingWindow: { ...DEFAULT_WINDOW },
-      retryCap: 1,
+      callingWindow: { ...defaults.callingWindow },
+      retryCap: defaults.retryCap,
       voiceBackendOrder: [...DEFAULT_BACKEND_ORDER],
       queue: [],
     },
@@ -67,8 +92,8 @@ export function campaignTemplates(): CampaignTemplate[] {
         { key: 'attended', label: 'Did the guest attend?', kind: 'boolean' },
         { key: 'feedback', label: 'Feedback in the guest\'s words', kind: 'text' },
       ],
-      callingWindow: { ...DEFAULT_WINDOW },
-      retryCap: 1,
+      callingWindow: { ...defaults.callingWindow },
+      retryCap: defaults.retryCap,
       voiceBackendOrder: [...DEFAULT_BACKEND_ORDER],
       queue: [],
     },

@@ -2,12 +2,19 @@
 
 /**
  * Run control for one campaign: start the saved queue now or at a chosen time,
- * watch who is on the phone, and stop or cancel. Polls only while a run is
- * live or waiting for its start, so an idle page makes no requests.
+ * watch who is on the phone, and stop or cancel. Outside calling hours needs a
+ * double confirmation before anything is dialed or scheduled.
  */
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
+import {
+  OutsideWindowConfirm,
+  OutsideWindowNotice,
+  type OutsideWindowStep,
+} from './OutsideWindowConfirm';
+import { isWithinCallingWindow } from '../domain/eligibility';
+import type { CallingHoursMode } from '../domain/settings';
 import { formatInZone, isoToZonedInput, zonedInputToIso } from '../lib/time';
 import {
   ATTEMPT_STATUS_LABELS,
@@ -27,15 +34,30 @@ interface Props {
   guests: Guest[];
   /** The most recent run for this campaign, so a reload keeps following it. */
   initialRun: Run | null;
+  /** Strict refuses outside-hours dials. Soft opens the two-step confirmation. */
+  callingHoursMode?: CallingHoursMode;
 }
 
-export function RunControls({ campaign, guests, initialRun }: Props) {
+type PendingStart =
+  | { kind: 'now' }
+  | { kind: 'schedule'; startsAt: string; form: HTMLFormElement };
+
+export function RunControls({ campaign, guests, initialRun, callingHoursMode = 'soft' }: Props) {
   const router = useRouter();
   const [run, setRun] = useState<Run | null>(initialRun);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
+  const [pending, setPending] = useState<PendingStart | null>(null);
+  const [now, setNow] = useState(() => new Date());
   const timeZone = campaign.callingWindow.timezone;
+  const outsideNow = !isWithinCallingWindow(now, campaign.callingWindow);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const guestName = useCallback(
     (guestId: string | null) =>
@@ -47,16 +69,12 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
   const scheduled = run?.status === 'scheduled';
   const following = live || scheduled;
 
-  // Refresh the server-rendered parts of the page once a run settles, so the
-  // results and attempt counts elsewhere stop being stale.
   const wasFollowing = useRef(following);
   useEffect(() => {
     if (wasFollowing.current && !following) router.refresh();
     wasFollowing.current = following;
   }, [following, router]);
 
-  // Keyed on the run id, not the run object, so one interval covers the whole
-  // run instead of being torn down and rebuilt on every poll.
   const runId = run?.id ?? null;
   useEffect(() => {
     if (!runId || !following) return;
@@ -87,7 +105,74 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
     };
   }, [following, runId]);
 
-  async function send(path: string, failure: string) {
+  function clearOutsideGate() {
+    setOutsideStep('idle');
+    setPending(null);
+  }
+
+  /** POST a start or schedule, optionally with the outside-hours override. */
+  async function postStart(body: Record<string, unknown>, failure: string, form?: HTMLFormElement) {
+    setBusy(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/campaigns/${campaign.id}/runs`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = (await response.json()) as { run?: Run; error?: string };
+      if (!response.ok || !payload.run) throw new Error(payload.error ?? failure);
+      setRun(payload.run);
+      form?.reset();
+      clearOutsideGate();
+    } catch (postError) {
+      setError((postError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function requestStartNow() {
+    if (!isWithinCallingWindow(new Date(), campaign.callingWindow)) {
+      setPending({ kind: 'now' });
+      setOutsideStep('ack');
+      return;
+    }
+    void postStart({}, 'could not start the run');
+  }
+
+  function requestSchedule(formEvent: FormEvent<HTMLFormElement>) {
+    formEvent.preventDefault();
+    const form = formEvent.currentTarget;
+    const raw = String(new FormData(form).get('startsAt') ?? '').trim();
+    if (!raw) {
+      setError('Pick a time first.');
+      return;
+    }
+    const startsAt = zonedInputToIso(raw, timeZone);
+    const at = new Date(startsAt);
+    if (!isWithinCallingWindow(at, campaign.callingWindow)) {
+      setPending({ kind: 'schedule', startsAt, form });
+      setOutsideStep('ack');
+      return;
+    }
+    void postStart({ startsAt }, 'could not schedule the run', form);
+  }
+
+  async function confirmOutside() {
+    if (!pending) return;
+    if (pending.kind === 'now') {
+      await postStart({ waiveCallingWindow: true }, 'could not start the run');
+      return;
+    }
+    await postStart(
+      { startsAt: pending.startsAt, waiveCallingWindow: true },
+      'could not schedule the run',
+      pending.form,
+    );
+  }
+
+  async function stop(path: string, failure: string) {
     setBusy(true);
     setError(null);
     try {
@@ -95,34 +180,8 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
       const payload = (await response.json()) as { run?: Run; error?: string };
       if (!response.ok || !payload.run) throw new Error(payload.error ?? failure);
       setRun(payload.run);
-    } catch (sendError) {
-      setError((sendError as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /**
-   * Save a start time taken from the field itself. A controlled value stayed
-   * empty when the picker showed a time, which left Schedule disabled.
-   */
-  async function schedule(formEvent: FormEvent<HTMLFormElement>) {
-    formEvent.preventDefault();
-    const raw = String(new FormData(formEvent.currentTarget).get('startsAt') ?? '').trim();
-    setBusy(true);
-    setError(null);
-    try {
-      const response = await fetch(`/api/campaigns/${campaign.id}/runs`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ startsAt: zonedInputToIso(raw, timeZone) }),
-      });
-      const payload = (await response.json()) as { run?: Run; error?: string };
-      if (!response.ok || !payload.run) throw new Error(payload.error ?? 'could not schedule the run');
-      setRun(payload.run);
-      formEvent.currentTarget.reset();
-    } catch (scheduleError) {
-      setError((scheduleError as Error).message);
+    } catch (stopError) {
+      setError((stopError as Error).message);
     } finally {
       setBusy(false);
     }
@@ -135,6 +194,21 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
 
   return (
     <div className="stack">
+      {outsideNow && !live && !scheduled ? (
+        <OutsideWindowNotice window={campaign.callingWindow} mode={callingHoursMode} />
+      ) : null}
+
+      <OutsideWindowConfirm
+        window={campaign.callingWindow}
+        step={outsideStep}
+        busy={busy}
+        mode={callingHoursMode}
+        confirmLabel={pending?.kind === 'schedule' ? 'Schedule anyway' : 'Call anyway'}
+        onAck={() => setOutsideStep('final')}
+        onConfirm={() => void confirmOutside()}
+        onCancel={clearOutsideGate}
+      />
+
       <div className="toolbar-split">
         <span className="small muted">
           <Icon name="users" /> {campaign.queue.length} guests in the saved queue
@@ -142,8 +216,8 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
         <div className="toolbar">
           <button
             type="button"
-            disabled={busy || live || scheduled || campaign.queue.length === 0}
-            onClick={() => send(`/api/campaigns/${campaign.id}/runs`, 'could not start the run')}
+            disabled={busy || live || scheduled || campaign.queue.length === 0 || outsideStep !== 'idle'}
+            onClick={requestStartNow}
           >
             <Icon name="phone" /> {live ? 'Running...' : `Call all ${campaign.queue.length}`}
           </button>
@@ -152,7 +226,7 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
               type="button"
               className="secondary"
               disabled={busy}
-              onClick={() => send(`/api/runs/${run.id}/stop`, 'could not cancel the schedule')}
+              onClick={() => void stop(`/api/runs/${run.id}/stop`, 'could not cancel the schedule')}
             >
               <Icon name="phoneOff" /> Stop
             </button>
@@ -161,7 +235,7 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
               type="button"
               className="secondary"
               disabled={busy || !live || !run}
-              onClick={() => run && send(`/api/runs/${run.id}/stop`, 'could not stop the run')}
+              onClick={() => run && void stop(`/api/runs/${run.id}/stop`, 'could not stop the run')}
             >
               <Icon name="ban" /> Stop
             </button>
@@ -182,7 +256,7 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
 
       {!live && !scheduled && campaign.queue.length > 0 ? (
         <>
-          <form className="luma-row" onSubmit={(formEvent) => void schedule(formEvent)}>
+          <form className="luma-row" onSubmit={(formEvent) => void requestSchedule(formEvent)}>
             <div className="grow">
               <label htmlFor="schedule-start">Or start at ({timeZone})</label>
               <input
@@ -191,9 +265,10 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
                 type="datetime-local"
                 required
                 min={isoToZonedInput(new Date().toISOString(), timeZone)}
+                disabled={outsideStep !== 'idle'}
               />
             </div>
-            <button type="submit" disabled={busy}>
+            <button type="submit" disabled={busy || outsideStep !== 'idle'}>
               <Icon name="clock" /> {busy ? 'Scheduling...' : 'Schedule'}
             </button>
           </form>
@@ -222,6 +297,11 @@ export function RunControls({ campaign, guests, initialRun }: Props) {
             {run.skipped.length > 0 ? (
               <span className="chip">
                 <Icon name="ban" /> {run.skipped.length} skipped
+              </span>
+            ) : null}
+            {run.waiveCallingWindow ? (
+              <span className="chip">
+                <Icon name="alert" /> outside-hours override
               </span>
             ) : null}
             {run.kind === 'single' ? (

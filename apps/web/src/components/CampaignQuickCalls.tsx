@@ -3,11 +3,19 @@
 /**
  * One low bar per queue that already has guests, shown inside the call queue.
  * A warm bar is waiting for a person. A green bar will call unless it is stopped.
+ * Outside calling hours needs a double confirmation before dialing or scheduling.
  */
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon';
+import {
+  OutsideWindowConfirm,
+  OutsideWindowNotice,
+  type OutsideWindowStep,
+} from './OutsideWindowConfirm';
+import { isWithinCallingWindow } from '../domain/eligibility';
+import type { CallingHoursMode } from '../domain/settings';
 import { summarizeSkips } from '../domain/run-skips';
 import { formatInZone, isoToZonedInput, zonedInputToIso } from '../lib/time';
 import { LIVE_RUN_STATUSES, type Campaign, type Run } from '../domain/types';
@@ -21,7 +29,13 @@ interface Props {
   campaigns: Campaign[];
   /** Newest first, same order the event page already loaded. */
   runs: Run[];
+  /** Strict refuses outside-hours dials. Soft opens the two-step confirmation. */
+  callingHoursMode?: CallingHoursMode;
 }
+
+type PendingAction =
+  | { campaignId: string; kind: 'now' }
+  | { campaignId: string; kind: 'schedule'; startsAt: string };
 
 /** A run the page should keep watching until it settles. */
 function isOpen(run: Run | null): run is Run {
@@ -35,14 +49,26 @@ function barTone(run: Run | null): BarTone {
   return 'pending';
 }
 
-export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
+export function CampaignQuickCalls({
+  eventId,
+  campaigns,
+  runs,
+  callingHoursMode = 'soft',
+}: Props) {
   const router = useRouter();
   const ready = campaigns.filter((campaign) => campaign.queue.length > 0);
   const [overrides, setOverrides] = useState<Record<string, Run>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  // Filled after mount so server and client render the same empty minimum.
   const [minByZone, setMinByZone] = useState<Record<string, string>>({});
+  const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
+  const [pending, setPending] = useState<PendingAction | null>(null);
+  const [now, setNow] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   function runFor(campaignId: string): Run | null {
     return overrides[campaignId] ?? runs.find((run) => run.campaignId === campaignId) ?? null;
@@ -98,21 +124,24 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
     };
   }, [openKey]);
 
-  /** Start the queue now, or at `startsAt` when that field is set. */
-  async function postRun(campaign: Campaign, body: Record<string, string> | null, failure: string) {
+  function clearOutsideGate() {
+    setOutsideStep('idle');
+    setPending(null);
+  }
+
+  async function postRun(campaign: Campaign, body: Record<string, unknown>, failure: string) {
     setBusyId(campaign.id);
     setErrors((current) => ({ ...current, [campaign.id]: '' }));
     try {
       const response = await fetch(`/api/campaigns/${campaign.id}/runs`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body ?? {}),
+        body: JSON.stringify(body),
       });
       const payload = (await response.json()) as { run?: Run; error?: string };
       if (!response.ok || !payload.run) throw new Error(payload.error ?? failure);
       setOverrides((current) => ({ ...current, [campaign.id]: payload.run! }));
-      // A run that only skips (outside the window, retry cap) is already
-      // finished in this response, so the live poll never sees it.
+      clearOutsideGate();
       if (!isOpen(payload.run)) router.refresh();
     } catch (postError) {
       setErrors((current) => ({ ...current, [campaign.id]: (postError as Error).message }));
@@ -121,24 +150,45 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
     }
   }
 
-  /**
-   * Read the time from the field, not from React state. The picker can show a
-   * time without that state updating, which left Schedule disabled.
-   */
-  function schedule(campaign: Campaign, form: HTMLFormElement) {
+  function requestNow(campaign: Campaign) {
+    if (!isWithinCallingWindow(new Date(), campaign.callingWindow)) {
+      setPending({ campaignId: campaign.id, kind: 'now' });
+      setOutsideStep('ack');
+      return;
+    }
+    void postRun(campaign, {}, 'could not start the run');
+  }
+
+  function requestSchedule(campaign: Campaign, form: HTMLFormElement) {
     const raw = String(new FormData(form).get('startsAt') ?? '').trim();
     if (!raw) {
       setErrors((current) => ({ ...current, [campaign.id]: 'Pick a time first.' }));
       return;
     }
-    void postRun(
+    const startsAt = zonedInputToIso(raw, campaign.callingWindow.timezone);
+    if (!isWithinCallingWindow(new Date(startsAt), campaign.callingWindow)) {
+      setPending({ campaignId: campaign.id, kind: 'schedule', startsAt });
+      setOutsideStep('ack');
+      return;
+    }
+    void postRun(campaign, { startsAt }, 'could not schedule the run');
+  }
+
+  async function confirmOutside() {
+    if (!pending) return;
+    const campaign = ready.find((item) => item.id === pending.campaignId);
+    if (!campaign) return;
+    if (pending.kind === 'now') {
+      await postRun(campaign, { waiveCallingWindow: true }, 'could not start the run');
+      return;
+    }
+    await postRun(
       campaign,
-      { startsAt: zonedInputToIso(raw, campaign.callingWindow.timezone) },
+      { startsAt: pending.startsAt, waiveCallingWindow: true },
       'could not schedule the run',
     );
   }
 
-  /** Drop a start that has not dialed, or hang up a run that has. */
   async function stop(campaignId: string, run: Run) {
     setBusyId(campaignId);
     setErrors((current) => ({ ...current, [campaignId]: '' }));
@@ -158,11 +208,36 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
 
   if (ready.length === 0) return null;
 
+  const pendingCampaign = pending
+    ? ready.find((campaign) => campaign.id === pending.campaignId)
+    : undefined;
+  const anyOutside = ready.some(
+    (campaign) => barTone(runFor(campaign.id)) === 'pending' && !isWithinCallingWindow(now, campaign.callingWindow),
+  );
+
   return (
     <div>
       <p className="small muted">
         Warm bars are waiting for you. Green bars will call on their own. Stop one if you change your mind.
       </p>
+      {anyOutside ? (
+        <OutsideWindowNotice
+          window={ready.find((c) => !isWithinCallingWindow(now, c.callingWindow))!.callingWindow}
+          mode={callingHoursMode}
+        />
+      ) : null}
+      {pendingCampaign ? (
+        <OutsideWindowConfirm
+          window={pendingCampaign.callingWindow}
+          step={outsideStep}
+          busy={busyId === pendingCampaign.id}
+          mode={callingHoursMode}
+          confirmLabel={pending?.kind === 'schedule' ? 'Schedule anyway' : 'Call anyway'}
+          onAck={() => setOutsideStep('final')}
+          onConfirm={() => void confirmOutside()}
+          onCancel={clearOutsideGate}
+        />
+      ) : null}
       <ul className="queue-bars">
         {ready.map((campaign) => {
           const run = runFor(campaign.id);
@@ -171,6 +246,7 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
           const timeZone = campaign.callingWindow.timezone;
           const error = errors[campaign.id];
           const count = `${campaign.queue.length} queued`;
+          const gating = outsideStep !== 'idle';
 
           return (
             <li key={campaign.id}>
@@ -191,41 +267,53 @@ export function CampaignQuickCalls({ eventId, campaigns, runs }: Props) {
                 )}
 
                 {tone === 'pending' ? (
-                  <form
-                    className="queue-bar-actions"
-                    onSubmit={(formEvent) => {
-                      formEvent.preventDefault();
-                      schedule(campaign, formEvent.currentTarget);
-                    }}
-                  >
-                    <button
-                      type="button"
-                      className="icon-action"
-                      aria-label={`Call ${campaign.name} now`}
-                      disabled={busy}
-                      onClick={() => void postRun(campaign, null, 'could not start the run')}
-                    >
-                      <Icon name="phone" />
-                    </button>
-                    <input
-                      name="startsAt"
-                      type="datetime-local"
-                      aria-label={`Start ${campaign.name} (${timeZone})`}
-                      min={minByZone[timeZone] || undefined}
-                    />
-                    <button
-                      type="button"
-                      className="icon-action"
-                      aria-label={`Schedule ${campaign.name}`}
-                      disabled={busy}
-                      onClick={(clickEvent) => {
-                        const form = clickEvent.currentTarget.closest('form');
-                        if (form) schedule(campaign, form);
+                  <div className="queue-bar-actions">
+                    <form
+                      method="get"
+                      action={`/events/${eventId}`}
+                      onSubmit={(formEvent) => {
+                        formEvent.preventDefault();
+                        requestNow(campaign);
                       }}
                     >
-                      <Icon name="clock" />
-                    </button>
-                  </form>
+                      <input type="hidden" name="confirm" value={campaign.id} />
+                      <input type="hidden" name="step" value="1" />
+                      <button
+                        type="submit"
+                        className="icon-action"
+                        aria-label={`Call ${campaign.name} now`}
+                        disabled={busy || gating}
+                      >
+                        <Icon name="phone" />
+                      </button>
+                    </form>
+                    <form
+                      method="get"
+                      action={`/events/${eventId}`}
+                      onSubmit={(formEvent) => {
+                        formEvent.preventDefault();
+                        requestSchedule(campaign, formEvent.currentTarget);
+                      }}
+                    >
+                      <input type="hidden" name="confirm" value={campaign.id} />
+                      <input type="hidden" name="step" value="1" />
+                      <input
+                        name="startsAt"
+                        type="datetime-local"
+                        aria-label={`Start ${campaign.name} (${timeZone})`}
+                        min={minByZone[timeZone] || undefined}
+                        disabled={gating}
+                      />
+                      <button
+                        type="submit"
+                        className="icon-action"
+                        aria-label={`Schedule ${campaign.name}`}
+                        disabled={busy || gating}
+                      >
+                        <Icon name="clock" />
+                      </button>
+                    </form>
+                  </div>
                 ) : run ? (
                   <div className="queue-bar-actions">
                     <button

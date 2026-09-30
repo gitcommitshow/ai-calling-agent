@@ -10,10 +10,14 @@ export async function POST(
   { params }: { params: Promise<{ campaignId: string }> },
 ) {
   const { campaignId } = await params;
-  const payload = (await request.json().catch(() => ({}))) as { startsAt?: unknown };
+  const payload = (await request.json().catch(() => ({}))) as {
+    startsAt?: unknown;
+    waiveCallingWindow?: unknown;
+  };
   const startsAt = typeof payload.startsAt === 'string' ? payload.startsAt : undefined;
+  const waiveCallingWindow = payload.waiveCallingWindow === true;
   try {
-    const run = await startRun(campaignId, startsAt);
+    const run = await startRun(campaignId, { startsAt, waiveCallingWindow });
     return NextResponse.json({ run });
   } catch (error) {
     if (error instanceof ServerApiError) {

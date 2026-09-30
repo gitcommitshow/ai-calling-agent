@@ -1,16 +1,17 @@
 'use client';
 
 /**
- * Org settings editor: master prompts per campaign type, and the allowlist of
- * guest/event fields that may reach a voice backend. Campaigns can still opt
- * out of the master prompt and write their own.
+ * Org settings editor: master prompts, context allowlist, dialing defaults for
+ * new campaigns, and runtime call limits that every live call must honor.
  */
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
+import { SettingHint } from './SettingHint';
 import {
   CONTEXT_FIELD_IDS,
   CONTEXT_FIELD_META,
+  type CallingHoursMode,
   type ContextFieldId,
   type OrgSettings,
 } from '../domain/settings';
@@ -19,13 +20,21 @@ import { normalizeIndianPhone } from '../domain/phone';
 
 interface Props {
   initial: OrgSettings;
+  /** Read from the server environment. The organizer cannot change it here. */
+  callingHoursMode: CallingHoursMode;
 }
 
-export function SettingsForm({ initial }: Props) {
+export function SettingsForm({ initial, callingHoursMode }: Props) {
   const router = useRouter();
   const [preEvent, setPreEvent] = useState(initial.masterPrompts['pre-event']);
   const [postEvent, setPostEvent] = useState(initial.masterPrompts['post-event']);
   const [testNumber, setTestNumber] = useState(initial.testNumber ?? '');
+  const [windowStart, setWindowStart] = useState(initial.callingWindow.start);
+  const [windowEnd, setWindowEnd] = useState(initial.callingWindow.end);
+  const [retryCap, setRetryCap] = useState(initial.retryCap);
+  const [silenceSeconds, setSilenceSeconds] = useState(initial.silenceSeconds);
+  const [maxCallSeconds, setMaxCallSeconds] = useState(initial.maxCallSeconds);
+  const [dialTimeoutSeconds, setDialTimeoutSeconds] = useState(initial.dialTimeoutSeconds);
   const [contextFields, setContextFields] = useState<ContextFieldId[]>(initial.contextFields);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,11 +68,20 @@ export function SettingsForm({ initial }: Props) {
           } satisfies Record<CampaignType, string>,
           contextFields,
           testNumber: normalizedTestNumber,
+          callingWindow: {
+            start: windowStart,
+            end: windowEnd,
+            timezone: initial.callingWindow.timezone,
+          },
+          retryCap,
+          silenceSeconds,
+          maxCallSeconds,
+          dialTimeoutSeconds,
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'could not save settings');
-      setMessage('Settings saved. Campaigns using the master prompt pick this up on the next call.');
+      setMessage('Settings saved. New campaigns pick up dialing defaults. Live call limits apply on the next dial.');
       router.refresh();
     } catch (saveError) {
       setError((saveError as Error).message);
@@ -97,11 +115,117 @@ export function SettingsForm({ initial }: Props) {
 
       <section className="card stack">
         <div>
-          <h2>Master prompts</h2>
-          <p className="small muted">
-            Used by every campaign that has &quot;use master prompt&quot; on. Edit once here instead of
-            per event. Campaigns can still override with a custom prompt.
+          <h2>Default calling hours</h2>
+          <SettingHint
+            detail={
+              callingHoursMode === 'strict'
+                ? 'Copied onto each new campaign. Existing campaigns keep their own window until you edit them. STRICT_CALLING_HOURS is set, so a call outside the window is refused even after a confirmation. Unset that variable and restart the server to allow an override.'
+                : 'Copied onto each new campaign. Existing campaigns keep their own window until you edit them. The runner enforces the campaign window, not this org default. Outside hours, an organizer can continue only after confirming the risk twice.'
+            }
+          >
+            Seed for new campaigns only. A campaign that sets different hours wins for that queue.
+          </SettingHint>
+          <p className={callingHoursMode === 'strict' ? 'notice error' : 'notice'}>
+            <Icon name="alert" />{' '}
+            {callingHoursMode === 'strict'
+              ? 'Strict calling hours are on (STRICT_CALLING_HOURS). Calls outside the window are refused. Unset that variable and restart the server if you really need to call outside those hours.'
+              : 'Calling hours are soft. Outside the window, you can continue only after confirming the risk twice. Set STRICT_CALLING_HOURS=true and restart the server to refuse those calls.'}
           </p>
+        </div>
+        <div className="grid">
+          <div>
+            <label htmlFor="org-window-start">
+              Calling window start ({initial.callingWindow.timezone})
+            </label>
+            <input
+              id="org-window-start"
+              type="time"
+              value={windowStart}
+              required
+              onChange={(changeEvent) => setWindowStart(changeEvent.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="org-window-end">Calling window end</label>
+            <input
+              id="org-window-end"
+              type="time"
+              value={windowEnd}
+              required
+              onChange={(changeEvent) => setWindowEnd(changeEvent.target.value)}
+            />
+          </div>
+          <div>
+            <label htmlFor="org-retry-cap">Default attempts per guest</label>
+            <input
+              id="org-retry-cap"
+              type="number"
+              min={1}
+              max={10}
+              value={retryCap}
+              onChange={(changeEvent) => setRetryCap(Number(changeEvent.target.value))}
+            />
+            <SettingHint detail="New campaigns copy this number. Each campaign can raise or lower its own retry cap afterward. The campaign value is what the runner checks.">
+              Seed for new campaigns. The campaign&apos;s own retry cap is enforced at dial time.
+            </SettingHint>
+          </div>
+        </div>
+      </section>
+
+      <section className="card stack">
+        <div>
+          <h2>Live call limits</h2>
+          <SettingHint detail="These apply to every guest call and pipeline test. Campaigns cannot override them. Changing a value affects the next dial, not a call already on the line.">
+            Enforced on every live call. Campaign settings cannot override these.
+          </SettingHint>
+        </div>
+        <div className="grid">
+          <div>
+            <label htmlFor="silence-seconds">Silence before hangup (seconds)</label>
+            <input
+              id="silence-seconds"
+              type="number"
+              min={5}
+              max={600}
+              value={silenceSeconds}
+              required
+              onChange={(changeEvent) => setSilenceSeconds(Number(changeEvent.target.value))}
+            />
+          </div>
+          <div>
+            <label htmlFor="max-call-seconds">Maximum call length (seconds)</label>
+            <input
+              id="max-call-seconds"
+              type="number"
+              min={30}
+              max={3600}
+              value={maxCallSeconds}
+              required
+              onChange={(changeEvent) => setMaxCallSeconds(Number(changeEvent.target.value))}
+            />
+          </div>
+          <div>
+            <label htmlFor="dial-timeout-seconds">Ring timeout (seconds)</label>
+            <input
+              id="dial-timeout-seconds"
+              type="number"
+              min={10}
+              max={180}
+              value={dialTimeoutSeconds}
+              required
+              onChange={(changeEvent) => setDialTimeoutSeconds(Number(changeEvent.target.value))}
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="card stack">
+        <div>
+          <h2>Master prompts</h2>
+          <SettingHint detail="Used when a campaign has &quot;use master prompt&quot; on. A campaign custom prompt replaces this for that campaign only. Context field gates below still apply to both.">
+            Used by every campaign that keeps &quot;use master prompt&quot; on. A custom campaign prompt
+            overrides this for that campaign only.
+          </SettingHint>
         </div>
 
         <div>
@@ -128,10 +252,10 @@ export function SettingsForm({ initial }: Props) {
       <section className="card stack">
         <div>
           <h2>Context sent to the AI caller</h2>
-          <p className="small muted">
-            Only checked fields are substituted into placeholders or appended as call context.
-            Unchecked fields never leave this app for the voice backend. Phone is off by default.
-          </p>
+          <SettingHint detail="Org-wide gate. Unchecked fields never reach the voice backend, even if a campaign prompt mentions their placeholder. Campaigns cannot re-enable a field turned off here.">
+            Only checked fields may reach the voice backend. Campaigns cannot turn a gated-off field
+            back on.
+          </SettingHint>
         </div>
 
         <ul className="stack" style={{ listStyle: 'none', padding: 0, margin: 0 }}>

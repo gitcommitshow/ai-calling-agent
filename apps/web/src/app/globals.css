@@ -773,6 +773,10 @@ th {
   flex: 0 0 auto;
 }
 
+.queue-bar-actions form {
+  display: contents;
+}
+
 .queue-bar input[type='datetime-local'] {
   width: 11.5rem;
   height: 2rem;
@@ -794,6 +798,115 @@ th {
   padding: 0 var(--space-3);
   background: var(--raised);
   color: var(--text);
+}
+
+.setting-hint {
+  margin: var(--space-1) 0 0;
+  cursor: help;
+}
+
+/* Full-page block when dialing outside calling hours. */
+.outside-window-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(28, 25, 23, 0.72);
+}
+
+.outside-window-dialog {
+  width: min(28rem, 100%);
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-lift);
+}
+
+.outside-window-kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--danger);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.outside-window-kicker .icon {
+  color: inherit;
+}
+
+.outside-window-dialog h2 {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-heading);
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.outside-window-dialog #outside-window-body {
+  margin: 0 0 var(--space-5);
+  color: var(--text);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+}
+
+.outside-window-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+.outside-window-actions a.outside-window-cancel,
+.outside-window-actions a.outside-window-next {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.outside-window-actions a.outside-window-cancel {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.outside-window-actions a.outside-window-next,
+.outside-window-actions button.outside-window-danger {
+  background: var(--danger);
+  color: #fafaf9;
+}
+
+/* Inline notice that hours are closed; the dialog still blocks the action. */
+.outside-window-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: #fafaf9;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.outside-window-banner.static {
+  margin-bottom: var(--space-3);
+}
+
+.outside-window-banner .icon {
+  color: inherit;
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
 }
 
 .queue-bar-error {

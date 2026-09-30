@@ -16,6 +16,7 @@ import {
   listAttempts,
   listCampaigns,
   listGuests,
+  loadSettings,
   ServerApiError,
 } from '../../../../lib/server-api';
 import { formatInZone } from '../../../../lib/time';
@@ -31,12 +32,13 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
   const { id } = await params;
 
   try {
-    const [event, guests, campaigns, attempts, summary] = await Promise.all([
+    const [event, guests, campaigns, attempts, summary, org] = await Promise.all([
       getEvent(id),
       listGuests(id),
       listCampaigns(id),
       listAttempts(id),
       getSummary(id),
+      loadSettings(),
     ]);
 
     const guestById = new Map(guests.map((guest) => [guest.id, guest]));
@@ -87,7 +89,7 @@ export default async function ResultsPage({ params }: { params: Promise<{ id: st
           </div>
         </div>
 
-        <OpenQuestions eventId={event.id} rows={openRows} />
+        <OpenQuestions eventId={event.id} rows={openRows} callingHoursMode={org.callingHoursMode} />
 
         <section className="card">
           <h2>By campaign</h2>

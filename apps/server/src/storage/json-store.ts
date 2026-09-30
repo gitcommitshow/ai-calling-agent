@@ -48,15 +48,26 @@ export class JsonStore implements Storage {
   async getSettings(): Promise<OrgSettings> {
     const stored = await readJson<OrgSettings>(this.settingsPath);
     if (!stored) return defaultOrgSettings();
+    const defaults = defaultOrgSettings(stored.updatedAt);
     return {
-      ...defaultOrgSettings(stored.updatedAt),
+      ...defaults,
       ...stored,
       masterPrompts: {
-        ...defaultOrgSettings().masterPrompts,
+        ...defaults.masterPrompts,
         ...stored.masterPrompts,
       },
-      contextFields: stored.contextFields ?? defaultOrgSettings().contextFields,
+      contextFields: stored.contextFields ?? defaults.contextFields,
       testNumber: typeof stored.testNumber === 'string' ? stored.testNumber : null,
+      callingWindow: normalizeCallingWindow(stored.callingWindow, defaults.callingWindow),
+      retryCap: positiveLimit(stored.retryCap, defaults.retryCap, 1, 10),
+      silenceSeconds: positiveLimit(stored.silenceSeconds, defaults.silenceSeconds, 5, 600),
+      maxCallSeconds: positiveLimit(stored.maxCallSeconds, defaults.maxCallSeconds, 30, 3600),
+      dialTimeoutSeconds: positiveLimit(
+        stored.dialTimeoutSeconds,
+        defaults.dialTimeoutSeconds,
+        10,
+        180,
+      ),
     };
   }
 
@@ -268,7 +279,37 @@ function normalizeBrief(brief: EventBrief | undefined): EventBrief {
 /** Older runs are immediate dials, so they still honor the retry cap and have no start time. */
 function normalizeRun(run: RunRecord): RunRecord {
   const scheduledFor = typeof run.scheduledFor === 'string' && run.scheduledFor ? run.scheduledFor : null;
-  return { ...run, waiveRetryCap: run.waiveRetryCap === true, scheduledFor };
+  return {
+    ...run,
+    waiveRetryCap: run.waiveRetryCap === true,
+    waiveCallingWindow: run.waiveCallingWindow === true,
+    scheduledFor,
+  };
+}
+
+/** Fill a missing or partial calling window from the org default. */
+function normalizeCallingWindow(
+  value: OrgSettings['callingWindow'] | undefined,
+  fallback: OrgSettings['callingWindow'],
+): OrgSettings['callingWindow'] {
+  if (!value || typeof value !== 'object') return fallback;
+  const start = typeof value.start === 'string' ? value.start : fallback.start;
+  const end = typeof value.end === 'string' ? value.end : fallback.end;
+  const timezone = typeof value.timezone === 'string' ? value.timezone : fallback.timezone;
+  return { start, end, timezone };
+}
+
+/** Keep a stored limit inside its allowed range, or fall back. */
+function positiveLimit(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    return fallback;
+  }
+  return value;
 }
 
 /**

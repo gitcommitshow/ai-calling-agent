@@ -1,11 +1,12 @@
 /**
  * Create one more campaign for an event from the queue page. The two campaigns
- * that arrive with the event are the usual case; this is the extra one.
+ * that arrive with the event are the usual case; this is the extra one. Calling
+ * hours and retry cap come from org settings.
  */
 import { NextResponse } from 'next/server';
 import { campaignTemplates } from '../../../../../domain/campaign-templates';
 import type { CampaignType } from '../../../../../domain/types';
-import { createCampaign, ServerApiError } from '../../../../../lib/server-api';
+import { createCampaign, getSettings, ServerApiError } from '../../../../../lib/server-api';
 
 export async function POST(
   request: Request,
@@ -30,7 +31,8 @@ export async function POST(
       return NextResponse.json({ error: 'Choose before the event or after it.' }, { status: 400 });
     }
 
-    const template = campaignTemplates().find((item) => item.type === (type as CampaignType));
+    const settings = await getSettings();
+    const template = campaignTemplates(settings).find((item) => item.type === (type as CampaignType));
     if (!template) {
       return NextResponse.json({ error: 'That campaign type is not available.' }, { status: 400 });
     }

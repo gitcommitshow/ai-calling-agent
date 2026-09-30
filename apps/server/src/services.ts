@@ -40,6 +40,7 @@ export function buildCallServices(config: ServerConfig, storage: Storage): CallS
     voice,
     extraction,
     limits: config.limits,
+    strictCallingHours: config.strictCallingHours,
   });
 
   return { telephony, voice, extraction, runner };

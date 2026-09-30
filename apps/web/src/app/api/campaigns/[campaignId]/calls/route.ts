@@ -12,8 +12,15 @@ export async function POST(
 ) {
   const { campaignId } = await params;
   try {
-    const body = (await request.json()) as { guestId?: string; openQuestionId?: string };
-    const run = await callGuest(campaignId, body.guestId ?? '', body.openQuestionId);
+    const body = (await request.json()) as {
+      guestId?: string;
+      openQuestionId?: string;
+      waiveCallingWindow?: boolean;
+    };
+    const run = await callGuest(campaignId, body.guestId ?? '', {
+      openQuestionId: body.openQuestionId,
+      waiveCallingWindow: body.waiveCallingWindow === true,
+    });
     return NextResponse.json({ run });
   } catch (error) {
     if (error instanceof ServerApiError) {

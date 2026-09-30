@@ -86,4 +86,25 @@ describe('open questions', () => {
     expect(outside.ok).to.equal(false);
     if (!outside.ok) expect(outside.reason).to.include('outside the calling window');
   });
+
+  it('lets an organizer override calling hours without also waiving the retry cap', () => {
+    const outside = checkGuardrails(guest, {
+      event,
+      campaign: campaign(),
+      attemptsByGuest: {},
+      now: OUTSIDE,
+      waiveCallingWindow: true,
+    });
+    expect(outside).to.deep.equal({ ok: true });
+
+    const stillCapped = checkGuardrails(guest, {
+      event,
+      campaign: campaign(),
+      attemptsByGuest: { asha: 1 },
+      now: OUTSIDE,
+      waiveCallingWindow: true,
+    });
+    expect(stillCapped.ok).to.equal(false);
+    if (!stillCapped.ok) expect(stillCapped.reason).to.include('retry cap reached');
+  });
 });

@@ -36,7 +36,13 @@ import type {
   TelephonyPort,
 } from '../telephony/types.ts';
 import type { VoiceBackendPort, VoiceSession } from '../voice/types.ts';
-import { checkGuardrails, countAttemptsByGuest, scheduleBlockReason } from './guardrails.ts';
+import {
+  callingWindowRefusal,
+  checkGuardrails,
+  countAttemptsByGuest,
+  isWithinCallingWindow,
+  scheduleBlockReason,
+} from './guardrails.ts';
 import { assemblePrompt } from './prompt.ts';
 import { assembleTestPrompt } from './test-prompt.ts';
 
@@ -77,6 +83,8 @@ export interface RunnerDeps {
   voice: VoiceBackendPort;
   extraction: ExtractionPort;
   limits: CallLimits;
+  /** From STRICT_CALLING_HOURS. Outside hours is refused even after a confirmation. */
+  strictCallingHours?: boolean;
   now?: () => Date;
   log?: (message: string) => void;
   timers?: RunnerTimers;
@@ -190,19 +198,32 @@ export class CallRunner {
    */
   async startRun(
     campaign: CampaignRecord,
-    options: { kind: RunKind; guestIds?: string[]; waiveRetryCap?: boolean },
+    options: {
+      kind: RunKind;
+      guestIds?: string[];
+      waiveRetryCap?: boolean;
+      waiveCallingWindow?: boolean;
+    },
   ): Promise<RunRecord> {
     if (this.activeRunId) throw new RunConflictError(this.activeRunId);
 
     const guestIds = options.guestIds ?? [...campaign.queue];
     if (guestIds.length === 0) throw new GuardrailError('the campaign queue is empty');
     const waiveRetryCap = options.waiveRetryCap === true;
+    const waiveCallingWindow = options.waiveCallingWindow === true;
+
+    // Refuse the whole start outside calling hours unless the organizer
+    // confirmed. Queue runs used to skip every guest quietly after start.
+    this.assertCallingWindow(campaign, waiveCallingWindow);
 
     // A single guest is refused up front, so the organizer sees the reason at
     // once rather than finding a skipped entry on a finished run. Queue runs
     // are checked per guest instead, because a long queue goes stale mid-run.
     if (options.kind === 'single') {
-      await this.assertGuestCallable(campaign, guestIds[0]!, waiveRetryCap);
+      await this.assertGuestCallable(campaign, guestIds[0]!, {
+        waiveRetryCap,
+        waiveCallingWindow,
+      });
     }
 
     const startedAt = this.now().toISOString();
@@ -218,6 +239,7 @@ export class CallRunner {
       attemptIds: [],
       skipped: [],
       waiveRetryCap,
+      waiveCallingWindow,
       scheduledFor: null,
       startedAt,
       endedAt: null,
@@ -241,7 +263,11 @@ export class CallRunner {
    * it. The saved queue is read again when the start time arrives, so the
    * organizer can still change who is called.
    */
-  async scheduleRun(campaign: CampaignRecord, startsAt: Date): Promise<RunRecord> {
+  async scheduleRun(
+    campaign: CampaignRecord,
+    startsAt: Date,
+    options: { waiveCallingWindow?: boolean } = {},
+  ): Promise<RunRecord> {
     const at = startsAt.getTime();
     if (Number.isNaN(at)) throw new GuardrailError('choose a valid start time');
     const now = this.now().getTime();
@@ -250,6 +276,7 @@ export class CallRunner {
       throw new GuardrailError('choose a start time within the next 14 days');
     }
     if (campaign.queue.length === 0) throw new GuardrailError('the campaign queue is empty');
+    const waiveCallingWindow = options.waiveCallingWindow === true;
 
     return this.enqueueSchedule(async () => {
       const existing = await this.findScheduledRun();
@@ -262,7 +289,10 @@ export class CallRunner {
 
       const event = await this.deps.storage.getEvent(campaign.eventId);
       if (!event) throw new GuardrailError(`event not found: ${campaign.eventId}`);
-      const blocked = scheduleBlockReason(event, campaign, startsAt);
+      const blocked = scheduleBlockReason(event, campaign, startsAt, {
+        waiveCallingWindow,
+        strictCallingHours: this.deps.strictCallingHours === true,
+      });
       if (blocked) throw new GuardrailError(blocked);
 
       const createdAt = this.now().toISOString();
@@ -278,6 +308,7 @@ export class CallRunner {
         attemptIds: [],
         skipped: [],
         waiveRetryCap: false,
+        waiveCallingWindow,
         scheduledFor: startsAt.toISOString(),
         startedAt: createdAt,
         endedAt: null,
@@ -591,7 +622,7 @@ export class CallRunner {
   private async assertGuestCallable(
     campaign: CampaignRecord,
     guestId: string,
-    waiveRetryCap: boolean,
+    options: { waiveRetryCap: boolean; waiveCallingWindow: boolean },
   ): Promise<void> {
     const event = await this.deps.storage.getEvent(campaign.eventId);
     if (!event) throw new GuardrailError(`event not found: ${campaign.eventId}`);
@@ -605,9 +636,24 @@ export class CallRunner {
       campaign,
       attemptsByGuest: countAttemptsByGuest(attempts, campaign.id),
       now: this.now(),
-      waiveRetryCap,
+      waiveRetryCap: options.waiveRetryCap,
+      waiveCallingWindow: options.waiveCallingWindow,
+      strictCallingHours: this.deps.strictCallingHours === true,
     });
     if (!guard.ok) throw new GuardrailError(guard.reason);
+  }
+
+  /**
+   * Block a start that is outside daily calling hours unless the organizer
+   * already confirmed the override. Strict mode ignores that confirmation.
+   */
+  private assertCallingWindow(campaign: CampaignRecord, waiveCallingWindow: boolean): void {
+    const strictCallingHours = this.deps.strictCallingHours === true;
+    if (!strictCallingHours && waiveCallingWindow) return;
+    if (isWithinCallingWindow(this.now(), campaign.callingWindow)) return;
+    throw new GuardrailError(
+      callingWindowRefusal(campaign.callingWindow, { strictCallingHours, kind: 'start' }),
+    );
   }
 
   /**
@@ -642,6 +688,8 @@ export class CallRunner {
               attemptsByGuest: countAttemptsByGuest(attempts, campaign.id),
               now: this.now(),
               waiveRetryCap: run.waiveRetryCap === true,
+              waiveCallingWindow: run.waiveCallingWindow === true,
+              strictCallingHours: this.deps.strictCallingHours === true,
             })
           : { ok: false as const, reason: 'guest is no longer on the event' };
 
@@ -857,6 +905,7 @@ export class CallRunner {
 
     try {
       this.advance(live, 'dialing', `dialing ${live.to}`);
+      const limits = await this.resolveLimits();
       const { providerCallId } = await this.deps.telephony.dial({
         attemptId: live.attemptId,
         to: live.to,
@@ -874,7 +923,7 @@ export class CallRunner {
             machine: false,
             error: null,
           });
-        }, this.deps.limits.dialTimeoutSeconds * 1000),
+        }, limits.dialTimeoutSeconds * 1000),
       );
     } catch (error) {
       live.settle({
@@ -1019,26 +1068,44 @@ export class CallRunner {
     }
   }
 
+  /**
+   * Org settings own the live-call timers. Env limits are only a fallback when
+   * settings cannot be read.
+   */
+  private async resolveLimits(): Promise<CallLimits> {
+    try {
+      const settings = await this.deps.storage.getSettings();
+      return {
+        maxCallSeconds: settings.maxCallSeconds,
+        silenceSeconds: settings.silenceSeconds,
+        dialTimeoutSeconds: settings.dialTimeoutSeconds,
+      };
+    } catch {
+      return this.deps.limits;
+    }
+  }
+
   /** Bridge the answered call to the voice backend and arm the call guardrails. */
   private async startVoice(live: LiveCall, channel: AudioChannel): Promise<void> {
+    const limits = await this.resolveLimits();
     let lastGuestTurnAt = Date.now();
     // Annotated because it re-arms itself: the guest may simply be slow, and
     // only a full quiet period should end the call.
     const armSilence = (): NodeJS.Timeout => {
       const timer = setTimeout(() => {
         if (live.settled) return;
-        if (Date.now() - lastGuestTurnAt < this.deps.limits.silenceSeconds * 1000) {
+        if (Date.now() - lastGuestTurnAt < limits.silenceSeconds * 1000) {
           live.timers.push(armSilence());
           return;
         }
         void this.deps.telephony.hangup(live.attemptId);
         live.settle({
           reason: 'completed',
-          detail: `no guest speech for ${this.deps.limits.silenceSeconds}s`,
+          detail: `no guest speech for ${limits.silenceSeconds}s`,
           machine: false,
           error: null,
         });
-      }, this.deps.limits.silenceSeconds * 1000);
+      }, limits.silenceSeconds * 1000);
       return timer;
     };
 
@@ -1114,11 +1181,11 @@ export class CallRunner {
           void this.deps.telephony.hangup(live.attemptId);
           live.settle({
             reason: 'completed',
-            detail: `maximum call length of ${this.deps.limits.maxCallSeconds}s reached`,
+            detail: `maximum call length of ${limits.maxCallSeconds}s reached`,
             machine: false,
             error: null,
           });
-        }, this.deps.limits.maxCallSeconds * 1000),
+        }, limits.maxCallSeconds * 1000),
       );
       live.timers.push(armSilence());
     } catch (error) {

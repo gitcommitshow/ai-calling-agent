@@ -9,28 +9,44 @@ import { EventBriefForm } from '../../../components/EventBriefForm';
 import { GuestImport } from '../../../components/GuestImport';
 import { GuestQueue } from '../../../components/GuestQueue';
 import { Icon } from '../../../components/Icon';
+import { OutsideHoursGate } from '../../../components/OutsideHoursGate';
 import {
   getEvent,
   listAttempts,
   listCampaigns,
   listGuests,
   listRuns,
+  loadSettings,
   ServerApiError,
 } from '../../../lib/server-api';
 import { formatInZone } from '../../../lib/time';
 
 export const dynamic = 'force-dynamic';
 
-export default async function EventPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function EventPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{
+    confirm?: string;
+    step?: string;
+    guest?: string;
+    startsAt?: string;
+    callError?: string;
+  }>;
+}) {
   const { id } = await params;
+  const query = await searchParams;
 
   try {
-    const [event, guests, campaigns, attempts, runs] = await Promise.all([
+    const [event, guests, campaigns, attempts, runs, org] = await Promise.all([
       getEvent(id),
       listGuests(id),
       listCampaigns(id),
       listAttempts(id),
       listRuns(id),
+      loadSettings(),
     ]);
 
     const openQuestionCount = attempts.reduce(
@@ -39,8 +55,26 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
       0,
     );
 
+    const confirmed = campaigns.find((campaign) => campaign.id === query.confirm);
+    const gateStep = query.step === '2' ? '2' : query.step === '1' ? '1' : null;
+
     return (
       <div className="stack">
+        {confirmed && gateStep ? (
+          <OutsideHoursGate
+            eventId={event.id}
+            campaign={confirmed}
+            step={gateStep}
+            guestId={query.guest}
+            startsAt={query.startsAt}
+            callingHoursMode={org.callingHoursMode}
+          />
+        ) : null}
+        {query.callError ? (
+          <p className="notice error">
+            <Icon name="alert" /> {query.callError}
+          </p>
+        ) : null}
         <div>
           <h1>{event.name}</h1>
           <div className="meta">
@@ -102,6 +136,7 @@ export default async function EventPage({ params }: { params: Promise<{ id: stri
             attempts={attempts}
             runs={runs}
             nowIso={new Date().toISOString()}
+            callingHoursMode={org.callingHoursMode}
           />
         </section>
       </div>

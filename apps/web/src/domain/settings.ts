@@ -3,7 +3,7 @@
  * allow or withhold from the voice backend. Mirrors the server module; product
  * copy (labels) lives here because only the UI shows them.
  */
-import type { CampaignType } from './types';
+import type { CallingWindow, CampaignType } from './types';
 
 export const CONTEXT_FIELD_IDS = [
   'event.name',
@@ -22,11 +22,27 @@ export const CONTEXT_FIELD_IDS = [
 
 export type ContextFieldId = (typeof CONTEXT_FIELD_IDS)[number];
 
+/** Developer switch from STRICT_CALLING_HOURS. Soft allows a confirmed override. */
+export type CallingHoursMode = 'strict' | 'soft';
+
 export interface OrgSettings {
   masterPrompts: Record<CampaignType, string>;
   contextFields: ContextFieldId[];
   /** Fixed number one-click pipeline tests dial. Null until set. */
   testNumber: string | null;
+  /**
+   * Default calling hours for new campaigns. Dialing uses each campaign's own
+   * copy; change a campaign to override this org default for that queue only.
+   */
+  callingWindow: CallingWindow;
+  /** Default attempts per guest for new campaigns. */
+  retryCap: number;
+  /** Quiet-guest hangup for every live call. Campaigns cannot override this. */
+  silenceSeconds: number;
+  /** Maximum length of one live call. Campaigns cannot override this. */
+  maxCallSeconds: number;
+  /** Ring timeout before a dial is abandoned. Campaigns cannot override this. */
+  dialTimeoutSeconds: number;
   updatedAt: string;
 }
 
@@ -75,3 +91,8 @@ export const CONTEXT_FIELD_META: Record<
     hint: 'The structured questions the agent must try to answer before hanging up.',
   },
 };
+
+/** Compare two calling windows field by field. */
+export function sameCallingWindow(a: CallingWindow, b: CallingWindow): boolean {
+  return a.start === b.start && a.end === b.end && a.timezone === b.timezone;
+}

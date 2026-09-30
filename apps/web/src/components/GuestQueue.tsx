@@ -11,8 +11,13 @@ import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { CampaignQuickCalls } from './CampaignQuickCalls';
 import { Icon } from './Icon';
+import {
+  OutsideWindowConfirm,
+  type OutsideWindowStep,
+} from './OutsideWindowConfirm';
 import { APPROVAL_STATUS_ICONS } from './status-icons';
 import { defaultCampaign } from '../domain/default-campaign';
+import type { CallingHoursMode } from '../domain/settings';
 import {
   checkEligibility,
   countAttemptsByGuest,
@@ -53,9 +58,19 @@ interface Props {
   attempts: Attempt[];
   runs: Run[];
   nowIso: string;
+  /** Strict refuses outside-hours dials. Soft opens the two-step confirmation. */
+  callingHoursMode?: CallingHoursMode;
 }
 
-export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }: Props) {
+export function GuestQueue({
+  event,
+  guests,
+  campaigns,
+  attempts,
+  runs,
+  nowIso,
+  callingHoursMode = 'soft',
+}: Props) {
   const router = useRouter();
   const initialCampaign = defaultCampaign(campaigns, event, new Date(nowIso));
   const [campaignId, setCampaignId] = useState(initialCampaign?.id ?? '');
@@ -76,6 +91,8 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
   const [callResults, setCallResults] = useState<Record<string, string>>({});
   /** Brief highlight on a card after Earlier/Later so the move is visible. */
   const [movedGuestId, setMovedGuestId] = useState<string | null>(null);
+  const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
+  const [pendingOutsideGuest, setPendingOutsideGuest] = useState<Guest | null>(null);
 
   const knownCampaigns = useMemo(() => {
     const byId = new Map(campaigns.map((item) => [item.id, item]));
@@ -173,19 +190,33 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
 
   /**
    * Call one guest. The server owns the decision and reads the number from
-   * storage, then runs the call as a run of one. This follows that run to the
-   * end so the guest's card shows the outcome instead of just "started".
+   * storage, then runs the call as a run of one. Outside calling hours needs a
+   * double confirmation before the request is sent.
    */
-  async function callNow(guest: Guest) {
+  async function callNow(guest: Guest, waiveCallingWindow = false) {
     if (!campaign) return;
+    const state = eligibility.get(guest.id);
+    const outsideWindow =
+      state?.eligible === false && state.reason.startsWith('outside the calling window');
+    if (outsideWindow && !waiveCallingWindow) {
+      setPendingOutsideGuest(guest);
+      setOutsideStep('ack');
+      return;
+    }
+
     setCallingGuestId(guest.id);
     setCallResults((current) => ({ ...current, [guest.id]: 'Starting the call...' }));
+    setOutsideStep('idle');
+    setPendingOutsideGuest(null);
 
     try {
       const response = await fetch(`/api/campaigns/${campaign.id}/calls`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ guestId: guest.id }),
+        body: JSON.stringify({
+          guestId: guest.id,
+          ...(waiveCallingWindow ? { waiveCallingWindow: true } : {}),
+        }),
       });
       const payload = (await response.json()) as { run?: Run; error?: string };
       if (!response.ok || !payload.run) throw new Error(payload.error ?? 'the call was refused');
@@ -317,11 +348,14 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
     const callResult = callResults[guest.id];
     const skipReason = skippedOnLatestRun.get(guest.id);
     const skipAlreadyShown = skipReason !== undefined && skipReason === state?.reason;
-    const callBlockedBy = !state?.eligible
-      ? (state?.reason ?? 'pick a campaign')
-      : !savedInQueue
-        ? 'save the queue before calling this guest'
-        : null;
+    const outsideWindow =
+      state?.eligible === false && state.reason.startsWith('outside the calling window');
+    const callBlockedBy =
+      !state?.eligible && !outsideWindow
+        ? (state?.reason ?? 'pick a campaign')
+        : !savedInQueue
+          ? 'save the queue before calling this guest'
+          : null;
 
     return (
       <article
@@ -400,16 +434,32 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
         ) : null}
 
         <div className="entity-card-foot">
-          <button
-            type="button"
-            className="tiny"
-            disabled={callBlockedBy !== null || callingGuestId === guest.id}
-            title={callBlockedBy ?? `Call ${guest.name} now`}
-            onClick={() => callNow(guest)}
+          <form
+            method="get"
+            action={`/events/${event.id}`}
+            onSubmit={(formEvent) => {
+              formEvent.preventDefault();
+              void callNow(guest);
+            }}
           >
-            <Icon name="phone" />
-            {callingGuestId === guest.id ? 'Calling...' : 'Call now'}
-          </button>
+            <input type="hidden" name="confirm" value={campaign?.id ?? ''} />
+            <input type="hidden" name="guest" value={guest.id} />
+            <input type="hidden" name="step" value="1" />
+            <button
+              type="submit"
+              className="tiny"
+              disabled={
+                callBlockedBy !== null ||
+                callingGuestId === guest.id ||
+                outsideStep !== 'idle' ||
+                !campaign
+              }
+              title={callBlockedBy ?? `Call ${guest.name} now`}
+            >
+              <Icon name="phone" />
+              {callingGuestId === guest.id ? 'Calling...' : 'Call now'}
+            </button>
+          </form>
 
           {queued ? (
             <span className="toolbar">
@@ -438,7 +488,27 @@ export function GuestQueue({ event, guests, campaigns, attempts, runs, nowIso }:
 
   return (
     <div className="stack">
-      <CampaignQuickCalls eventId={event.id} campaigns={knownCampaigns} runs={runs} />
+      {campaign && pendingOutsideGuest ? (
+        <OutsideWindowConfirm
+          window={campaign.callingWindow}
+          step={outsideStep}
+          busy={callingGuestId === pendingOutsideGuest.id}
+          mode={callingHoursMode}
+          confirmLabel="Call anyway"
+          onAck={() => setOutsideStep('final')}
+          onConfirm={() => void callNow(pendingOutsideGuest, true)}
+          onCancel={() => {
+            setOutsideStep('idle');
+            setPendingOutsideGuest(null);
+          }}
+        />
+      ) : null}
+      <CampaignQuickCalls
+        eventId={event.id}
+        campaigns={knownCampaigns}
+        runs={runs}
+        callingHoursMode={callingHoursMode}
+      />
       <div className="grid">
         <div>
           <label htmlFor="campaign">Queue for campaign</label>

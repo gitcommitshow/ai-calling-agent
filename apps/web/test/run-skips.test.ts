@@ -20,6 +20,7 @@ function run(overrides: Partial<Run> = {}): Run {
     attemptIds: [],
     skipped: [{ guestId: 'asha', reason: windowReason }],
     waiveRetryCap: false,
+    waiveCallingWindow: false,
     scheduledFor: null,
     startedAt: '2026-09-29T15:07:00.000Z',
     endedAt: '2026-09-29T15:07:01.000Z',

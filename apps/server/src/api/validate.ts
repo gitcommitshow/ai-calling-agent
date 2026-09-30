@@ -70,6 +70,8 @@ export interface CallRequestInput {
   guestId: string;
   /** Set when this dial answers a saved question. Null for an ordinary call. */
   openQuestionId: string | null;
+  /** True only after the organizer double-confirmed outside calling hours. */
+  waiveCallingWindow: boolean;
 }
 
 /** Prompt choice on a test-call request before the server resolves defaults. */
@@ -283,6 +285,14 @@ function parseRetryCap(value: unknown): number {
   return value;
 }
 
+/** Whole seconds for org call limits, within a named range. */
+function parsePositiveSeconds(value: unknown, what: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw badRequest(`${what} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
 function parseBackendOrder(value: unknown): VoiceBackend[] {
   const rows = requireArray(value, 'voiceBackendOrder', 5);
   if (rows.length === 0) throw badRequest('voiceBackendOrder cannot be empty');
@@ -392,20 +402,42 @@ export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updated
     },
     contextFields,
     testNumber: parseOptionalIndianMobile(record.testNumber, 'testNumber'),
+    callingWindow: parseCallingWindow(
+      record.callingWindow ?? { start: '10:00', end: '20:00', timezone: 'Asia/Kolkata' },
+    ),
+    retryCap: parseRetryCap(record.retryCap ?? 1),
+    silenceSeconds: parsePositiveSeconds(record.silenceSeconds, 'silenceSeconds', 5, 600),
+    maxCallSeconds: parsePositiveSeconds(record.maxCallSeconds, 'maxCallSeconds', 30, 3600),
+    dialTimeoutSeconds: parsePositiveSeconds(
+      record.dialTimeoutSeconds,
+      'dialTimeoutSeconds',
+      10,
+      180,
+    ),
   };
 }
 
 /**
  * A queue run starts now, unless `startsAt` names a later instant. An empty
- * body is an immediate start.
+ * body is an immediate start. `waiveCallingWindow` is only for a confirmed
+ * override of daily calling hours.
  */
-export function parseRunStartInput(body: unknown): { startsAt: string | null } {
-  if (body === undefined || body === null) return { startsAt: null };
-  const record = asRecord(body, 'run');
-  if (record.startsAt === undefined || record.startsAt === null || record.startsAt === '') {
-    return { startsAt: null };
+export function parseRunStartInput(body: unknown): {
+  startsAt: string | null;
+  waiveCallingWindow: boolean;
+} {
+  if (body === undefined || body === null) {
+    return { startsAt: null, waiveCallingWindow: false };
   }
-  return { startsAt: requireIsoDate(record.startsAt, 'startsAt') };
+  const record = asRecord(body, 'run');
+  const waiveCallingWindow =
+    record.waiveCallingWindow === undefined
+      ? false
+      : parseBoolean(record.waiveCallingWindow, 'waiveCallingWindow');
+  if (record.startsAt === undefined || record.startsAt === null || record.startsAt === '') {
+    return { startsAt: null, waiveCallingWindow };
+  }
+  return { startsAt: requireIsoDate(record.startsAt, 'startsAt'), waiveCallingWindow };
 }
 
 /** A call request names a guest id only. The number always comes from storage. */
@@ -414,6 +446,10 @@ export function parseCallRequestInput(body: unknown): CallRequestInput {
   return {
     guestId: requireString(record.guestId, 'guestId', 120),
     openQuestionId: optionalString(record.openQuestionId, 'openQuestionId', 80),
+    waiveCallingWindow:
+      record.waiveCallingWindow === undefined
+        ? false
+        : parseBoolean(record.waiveCallingWindow, 'waiveCallingWindow'),
   };
 }
 

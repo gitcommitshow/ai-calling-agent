@@ -12,9 +12,9 @@ import { formatIndianPhone } from '../../../../../domain/phone';
 import {
   getCampaign,
   getEvent,
-  getSettings,
   listGuests,
   listRuns,
+  loadSettings,
   ServerApiError,
 } from '../../../../../lib/server-api';
 import type { Guest } from '../../../../../domain/types';
@@ -41,12 +41,12 @@ export default async function CampaignPage({
   const { id, campaignId } = await params;
 
   try {
-    const [event, campaign, guests, runs, settings] = await Promise.all([
+    const [event, campaign, guests, runs, org] = await Promise.all([
       getEvent(id),
       getCampaign(campaignId),
       listGuests(id),
       listRuns(id),
-      getSettings(),
+      loadSettings(),
     ]);
     const queued = orderByQueue(guests, campaign.queue);
     const sampleGuest = queued[0] ?? PLACEHOLDER_GUEST;
@@ -77,7 +77,12 @@ export default async function CampaignPage({
 
         <section className="card">
           <h2>Calling</h2>
-          <RunControls campaign={campaign} guests={guests} initialRun={latestRun} />
+          <RunControls
+            campaign={campaign}
+            guests={guests}
+            initialRun={latestRun}
+            callingHoursMode={org.callingHoursMode}
+          />
         </section>
 
         <section className="card">
@@ -85,7 +90,8 @@ export default async function CampaignPage({
           <CampaignForm
             event={event}
             campaign={campaign}
-            settings={settings}
+            settings={org.settings}
+            callingHoursMode={org.callingHoursMode}
             sampleGuest={sampleGuest}
           />
         </section>

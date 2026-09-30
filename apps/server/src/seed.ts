@@ -170,6 +170,7 @@ function makeRun(campaign: CampaignRecord, guestIds: string[], minutesAgo: numbe
     attemptIds: [],
     skipped: [],
     waiveRetryCap: false,
+    waiveCallingWindow: false,
     scheduledFor: null,
     startedAt,
     endedAt: new Date(Date.now() - (minutesAgo - 60) * 60 * 1000).toISOString(),

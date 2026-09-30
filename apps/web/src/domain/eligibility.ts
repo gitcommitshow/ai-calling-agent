@@ -21,12 +21,16 @@ export interface EligibilityContext {
 
 /** Local wall-clock time in the window's timezone, as HH:MM. */
 export function localClockTime(now: Date, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-GB', {
+  const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone,
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
-  }).format(now);
+    hourCycle: 'h23',
+  }).formatToParts(now);
+  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
+  // Always zero-pad: bare "9:30" string-compares as after "10:00".
+  return `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
 }
 
 export function isWithinCallingWindow(now: Date, window: Campaign['callingWindow']): boolean {

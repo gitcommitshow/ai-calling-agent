@@ -47,6 +47,8 @@ export interface ApiServices {
   telephony: TelephonyPort;
   /** Variables still unset before a real call can be placed, if any. */
   missingConfig?: () => string[];
+  /** STRICT_CALLING_HOURS. Omitted means soft, so older callers stay compatible. */
+  callingHoursMode?: 'strict' | 'soft';
 }
 
 interface RouteContext {
@@ -117,7 +119,12 @@ function requireCalling(services: ApiServices | undefined): ApiServices {
 async function startRun(
   services: ApiServices,
   campaign: CampaignRecord,
-  options: { kind: 'queue' | 'single'; guestIds?: string[]; waiveRetryCap?: boolean },
+  options: {
+    kind: 'queue' | 'single';
+    guestIds?: string[];
+    waiveRetryCap?: boolean;
+    waiveCallingWindow?: boolean;
+  },
 ): Promise<RunRecord> {
   try {
     return await services.runner.startRun(campaign, options);
@@ -133,9 +140,10 @@ async function scheduleRun(
   services: ApiServices,
   campaign: CampaignRecord,
   startsAt: Date,
+  options: { waiveCallingWindow?: boolean } = {},
 ): Promise<RunRecord> {
   try {
-    return await services.runner.scheduleRun(campaign, startsAt);
+    return await services.runner.scheduleRun(campaign, startsAt, options);
   } catch (error) {
     if (error instanceof RunConflictError) throw new HttpError(409, error.message);
     if (error instanceof GuardrailError) throw new HttpError(400, error.message);
@@ -282,9 +290,12 @@ const routes: Route[] = [
     },
   })),
 
-  route('GET', '/settings', async ({ storage }) => ({
+  route('GET', '/settings', async ({ storage, services }) => ({
     status: 200,
-    body: { settings: await storage.getSettings() },
+    body: {
+      settings: await storage.getSettings(),
+      callingHoursMode: services?.callingHoursMode === 'strict' ? 'strict' : 'soft',
+    },
   })),
 
   route('PUT', '/settings', async ({ body, storage }) => {
@@ -477,7 +488,7 @@ const routes: Route[] = [
   route('POST', '/campaigns/:campaignId/calls', async ({ params, body, storage, services }) => {
     const calling = requireCalling(services);
     const campaign = await loadCampaign(storage, params.campaignId!);
-    const { guestId, openQuestionId } = parseCallRequestInput(body);
+    const { guestId, openQuestionId, waiveCallingWindow } = parseCallRequestInput(body);
 
     const guest = await storage.getGuest(campaign.eventId, guestId);
     if (!guest) throw notFound(`guest not found on this event: ${guestId}`);
@@ -488,6 +499,7 @@ const routes: Route[] = [
       kind: 'single',
       guestIds: [guest.id],
       waiveRetryCap: openQuestionId !== null,
+      waiveCallingWindow,
     });
     return { status: 202, body: { run } };
   }),
@@ -527,10 +539,10 @@ const routes: Route[] = [
   route('POST', '/campaigns/:campaignId/runs', async ({ params, body, storage, services }) => {
     const calling = requireCalling(services);
     const campaign = await loadCampaign(storage, params.campaignId!);
-    const { startsAt } = parseRunStartInput(body);
+    const { startsAt, waiveCallingWindow } = parseRunStartInput(body);
     const run = startsAt
-      ? await scheduleRun(calling, campaign, new Date(startsAt))
-      : await startRun(calling, campaign, { kind: 'queue' });
+      ? await scheduleRun(calling, campaign, new Date(startsAt), { waiveCallingWindow })
+      : await startRun(calling, campaign, { kind: 'queue', waiveCallingWindow });
     return { status: 202, body: { run } };
   }),
 

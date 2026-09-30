@@ -5,7 +5,7 @@
  */
 import { NextResponse } from 'next/server';
 import { campaignTemplates } from '../../../../domain/campaign-templates';
-import { createCampaign, importLumaEvent, ServerApiError } from '../../../../lib/server-api';
+import { createCampaign, getSettings, importLumaEvent, ServerApiError } from '../../../../lib/server-api';
 
 export async function POST(request: Request) {
   const wantsJson = (request.headers.get('content-type') ?? '').includes('application/json');
@@ -14,7 +14,8 @@ export async function POST(request: Request) {
     const result = await importLumaEvent(url);
 
     if (result.created) {
-      for (const template of campaignTemplates()) {
+      const settings = await getSettings();
+      for (const template of campaignTemplates(settings)) {
         await createCampaign(result.event.id, template);
       }
     }

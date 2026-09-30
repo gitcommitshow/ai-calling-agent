@@ -17,6 +17,7 @@ const services = {
   runner,
   telephony,
   missingConfig: () => missingCallConfig(config),
+  callingHoursMode: config.strictCallingHours ? ('strict' as const) : ('soft' as const),
 };
 
 const server = createServer(createRequestListener(storage, services));
@@ -39,6 +40,9 @@ server.listen(config.port, config.host, () => {
   console.log(`[server] listening on http://${config.host}:${config.port}`);
   console.log(`[server] data folder: ${config.dataDir}`);
   console.log(`[server] telephony: ${telephony.provider}, voice: ${voice.backend}`);
+  console.log(
+    `[server] calling hours: ${config.strictCallingHours ? 'strict (STRICT_CALLING_HOURS)' : 'soft'}`,
+  );
   console.log(`[server] extraction: ${extraction.provider}`);
 
   const missing = missingCallConfig(config);

@@ -13,7 +13,7 @@ import type {
   TestCall,
 } from '../domain/types';
 import type { CampaignTemplate } from '../domain/campaign-templates';
-import type { OrgSettings } from '../domain/settings';
+import type { CallingHoursMode, OrgSettings } from '../domain/settings';
 
 const SERVER_URL = process.env.SERVER_URL?.replace(/\/$/, '') ?? 'http://127.0.0.1:4000';
 
@@ -180,17 +180,23 @@ export async function updateEvent(
 /**
  * Call one guest. The server reads the number from storage by id, so only a
  * guest on the list can be dialed. An open question id makes this a follow-up
- * that skips the retry cap. It answers with the run doing the calling.
+ * that skips the retry cap. `waiveCallingWindow` is only for a confirmed
+ * outside-hours override. It answers with the run doing the calling.
  */
 export async function callGuest(
   campaignId: string,
   guestId: string,
-  openQuestionId?: string,
+  options?: { openQuestionId?: string; waiveCallingWindow?: boolean },
 ): Promise<Run> {
+  const openQuestionId = options?.openQuestionId;
   return (
     await request<{ run: Run }>(`/campaigns/${campaignId}/calls`, {
       method: 'POST',
-      body: JSON.stringify(openQuestionId ? { guestId, openQuestionId } : { guestId }),
+      body: JSON.stringify({
+        guestId,
+        ...(openQuestionId ? { openQuestionId } : {}),
+        ...(options?.waiveCallingWindow ? { waiveCallingWindow: true } : {}),
+      }),
     })
   ).run;
 }
@@ -211,13 +217,20 @@ export async function resolveOpenQuestion(
 
 /**
  * Start the campaign's saved queue. Pass `startsAt` to dial later instead of
- * now. The server allows one live call at a time, and one scheduled start.
+ * now. `waiveCallingWindow` is only for a confirmed outside-hours override.
+ * The server allows one live call at a time, and one scheduled start.
  */
-export async function startRun(campaignId: string, startsAt?: string): Promise<Run> {
+export async function startRun(
+  campaignId: string,
+  options?: { startsAt?: string; waiveCallingWindow?: boolean },
+): Promise<Run> {
   return (
     await request<{ run: Run }>(`/campaigns/${campaignId}/runs`, {
       method: 'POST',
-      body: JSON.stringify(startsAt ? { startsAt } : {}),
+      body: JSON.stringify({
+        ...(options?.startsAt ? { startsAt: options.startsAt } : {}),
+        ...(options?.waiveCallingWindow ? { waiveCallingWindow: true } : {}),
+      }),
     })
   ).run;
 }
@@ -242,8 +255,20 @@ export async function getSummary(eventId: string): Promise<EventSummary> {
   return (await request<{ summary: EventSummary }>(`/events/${eventId}/summary`)).summary;
 }
 
+/** Org settings plus the server's calling-hours mode, which is not stored. */
+export async function loadSettings(): Promise<{
+  settings: OrgSettings;
+  callingHoursMode: CallingHoursMode;
+}> {
+  const body = await request<{ settings: OrgSettings; callingHoursMode?: string }>('/settings');
+  return {
+    settings: body.settings,
+    callingHoursMode: body.callingHoursMode === 'strict' ? 'strict' : 'soft',
+  };
+}
+
 export async function getSettings(): Promise<OrgSettings> {
-  return (await request<{ settings: OrgSettings }>('/settings')).settings;
+  return (await loadSettings()).settings;
 }
 
 export async function updateSettings(
