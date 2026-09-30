@@ -76,7 +76,17 @@ The Plivo adapter translates between this contract and Plivo's world: REST call 
 
 **Extraction port (in the server).** Turns a finished transcript plus the campaign's field definitions into captured values, using one LLM call that returns structured output. Any value that is missing, unclear, or fails validation becomes unknown. The same call also returns questions the guest asked that the event brief does not answer (D15). Every backend goes through this same step, so results from different backends are comparable. The model's reply is never trusted as-is: our own code parses the JSON and coerces each value against its field definition, so an enum can only ever hold one of its options. A question is kept only when it is non-empty and clearly something the guest asked.
 
-**Runner (in the server).** Works through a campaign's ordered queue one guest at a time. Before each dial it enforces runtime guardrails (phone present, queue membership, event timing, calling window, retry cap). A follow-up placed from an open question skips the retry cap only (D15). It creates the attempt, dials, starts the voice backend when the guest answers, saves transcript turns as they arrive, maps the end reason to an outcome, runs extraction, and then moves to the next guest. Calling one guest on demand uses the same path with a queue of one. A run is a stored record, so the organizer can start it, watch it, stop it, and see afterwards which guests were skipped and why. Pipeline tests reuse that dial and voice bridge, skip guest guardrails, and persist a separate record (D13).
+**Runner (in the server).** Works through a campaign's ordered queue one guest at a time.
+
+Before each dial it checks that the guest has a phone, is on the queue, fits the event timing, is inside the calling window, and is under the retry cap.
+
+- A follow-up from an open question skips the retry cap only (D15).
+- A double-confirmed override skips the calling window only, unless `STRICT_CALLING_HOURS` is set (D18).
+- A scheduled start is stored on the run and restored after a restart (D18).
+
+For each guest it creates the attempt, dials, and starts the voice backend when the guest answers. Transcript turns are saved as they arrive. The end reason becomes the outcome, extraction runs, and the runner moves on. Calling one guest uses the same path with a queue of one.
+
+A run is a stored record. The organizer can start it, watch it, stop it, and see afterwards which guests were skipped and why. Pipeline tests reuse that dial and voice bridge, skip guest guardrails, and persist a separate record (D13).
 
 The runner assembles the prompt itself, rather than being handed one, because it works long after the organizer's request returned. That assembly mirrors the web app's preview module; the README promises the preview is the text a call uses, so the two change together (D5 keeps them unshared for now). Assembly always appends the event brief and the shared unanswered-question rule (D15).
 
@@ -167,6 +177,9 @@ The description is what a Luma check fills, and a later check replaces it. The e
 
 **D17. One phone, one guest (2026-09-29).**
 The organizer can type in a guest who is not on the CSV: a name and a phone number. The country code is shown and starts at +91, because that is the usual guest, and it can be changed. A number with no country code is stored as India only when it is a 10-digit mobile. Any other E.164 number is stored too. Calling still reaches Indian numbers only, so a guest elsewhere is listed and not dialed. That guest is stored as added by hand, and the event page lists those guests apart from imported ones. A phone number belongs to one guest. Adding a number that is already on the list, from either group, is refused, and the existing guest is named. A CSV import replaces imported guests and leaves hand-added guests in place. A CSV row whose phone is already on the list is not added.
+
+**D18. Calling hours are a campaign copy, waived only after two confirmations (2026-09-30).**
+Org settings hold the default window, copied onto each new campaign. The runner enforces that copy. Outside it, a start or a schedule is refused until the organizer confirms twice, and that waiver is stored on the run. `STRICT_CALLING_HOURS` ignores the waiver. A scheduled run is put back on the clock after a restart. A start that passed while the server was down is marked failed.
 
 ## Data and control flow
 

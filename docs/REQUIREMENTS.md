@@ -57,6 +57,8 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ The system does not auto-dial the full list without the organizer choosing the set and starting the run.
 - ✓ Each guest shows the reason they cannot be called yet.
 - ✓ The organizer can stop a run while it is going, and see who is being called and who was skipped.
+- ✓ The organizer can start, stop, or schedule a queued campaign from the event page. The scheduled time includes the clock time from the field, and pre-event or post-event timing still applies.
+- ✓ A run's skip reasons show on the queue bar and on each guest card, including when the run finishes before the next poll.
 
 ### Call campaigns
 
@@ -71,6 +73,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ One pre-event attempt and one post-event attempt per guest in the initial pass, unless the organizer explicitly retries. Do not start a post-event campaign before the event ends, or a pre-event campaign after it starts.
 - ✓ Place calls only in a reasonable local window. Cap retries.
 - ✓ Phase 1 places calls to Indian numbers only. Guests with another country code stay on the list and are not dialed. The default window is 10:00-20:00 IST, editable per campaign.
+- ✓ New campaigns copy calling hours from org settings. Outside that window, a dial or a scheduled start waits until the organizer confirms twice. `STRICT_CALLING_HOURS` refuses that override.
 - ✓ Phase 1 places calls one at a time, not in parallel.
 - ✓ Each campaign has one conversation language (for example English or Hindi), chosen by the organizer.
 - The organizer can add another campaign of either type from the queue, with its own name, its own guest list, and one line for what that call is for. It keeps that type's master prompt, and that line is the only addition. The timing rules for that type still apply.
