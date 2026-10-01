@@ -175,6 +175,13 @@ export class CallRunner {
     return this.activeRunId;
   }
 
+  /** Drop the live-call lock when this run still holds it. */
+  private releaseLock(runId: string): void {
+    if (this.activeRunId !== runId) return;
+    this.activeRunId = null;
+    this.stopRequested = false;
+  }
+
   private now(): Date {
     return this.deps.now?.() ?? new Date();
   }
@@ -216,16 +223,6 @@ export class CallRunner {
     // confirmed. Queue runs used to skip every guest quietly after start.
     this.assertCallingWindow(campaign, waiveCallingWindow);
 
-    // A single guest is refused up front, so the organizer sees the reason at
-    // once rather than finding a skipped entry on a finished run. Queue runs
-    // are checked per guest instead, because a long queue goes stale mid-run.
-    if (options.kind === 'single') {
-      await this.assertGuestCallable(campaign, guestIds[0]!, {
-        waiveRetryCap,
-        waiveCallingWindow,
-      });
-    }
-
     const startedAt = this.now().toISOString();
     const run: RunRecord = {
       id: newRunId(startedAt),
@@ -246,9 +243,35 @@ export class CallRunner {
       error: null,
     };
 
+    // Claim before any await. A due schedule checks this same lock and must
+    // not dial while guest lookup is still in flight.
     this.activeRunId = run.id;
     this.stopRequested = false;
-    await this.deps.storage.putRun(run);
+    try {
+      await this.enqueueSchedule(async () => {
+        const scheduled = await this.findScheduledRun();
+        if (scheduled && scheduled.campaignId === campaign.id) {
+          throw new RunConflictError(
+            scheduled.id,
+            `a run is already scheduled (${scheduled.id}). Cancel it before starting another.`,
+          );
+        }
+      });
+
+      // A single guest is refused up front, so the organizer sees the reason at
+      // once rather than finding a skipped entry on a finished run. Queue runs
+      // are checked per guest instead, because a long queue goes stale mid-run.
+      if (options.kind === 'single') {
+        await this.assertGuestCallable(campaign, guestIds[0]!, {
+          waiveRetryCap,
+          waiveCallingWindow,
+        });
+      }
+      await this.deps.storage.putRun(run);
+    } catch (error) {
+      this.releaseLock(run.id);
+      throw error;
+    }
 
     void this.execute(run).catch(async (error: unknown) => {
       this.log(`run ${run.id} failed: ${String(error)}`);
@@ -351,7 +374,12 @@ export class CallRunner {
 
     this.activeRunId = call.id;
     this.stopRequested = false;
-    await this.deps.storage.putTestCall(call);
+    try {
+      await this.deps.storage.putTestCall(call);
+    } catch (error) {
+      this.releaseLock(call.id);
+      throw error;
+    }
 
     void this.executeTestCall(call).catch(async (error: unknown) => {
       this.log(`test call ${call.id} failed: ${String(error)}`);
@@ -363,7 +391,6 @@ export class CallRunner {
         endedAt: this.now().toISOString(),
         error: error instanceof Error ? error.message : String(error),
       });
-      this.activeRunId = null;
     });
 
     return call;
@@ -534,7 +561,7 @@ export class CallRunner {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log(`scheduled run ${runId} failed to start: ${message}`);
-      if (this.activeRunId === runId) this.activeRunId = null;
+      this.releaseLock(runId);
       const latest = await this.deps.storage.findRun(runId).catch(() => null);
       if (latest?.status !== 'scheduled') return;
       await this.deps.storage
@@ -568,7 +595,7 @@ export class CallRunner {
     try {
       const campaign = await this.deps.storage.getCampaign(run.eventId, run.campaignId);
       if (!campaign || campaign.queue.length === 0) {
-        this.activeRunId = null;
+        this.releaseLock(runId);
         await this.deps.storage.putRun({
           ...run,
           status: 'failed',
@@ -585,6 +612,9 @@ export class CallRunner {
         ...run,
         status: 'running',
         guestIds: [...campaign.queue],
+        // Dialing starts now, so this run sorts ahead of calls that finished
+        // while it was waiting.
+        startedAt: this.now().toISOString(),
       };
       await this.deps.storage.putRun(running);
 
@@ -597,7 +627,7 @@ export class CallRunner {
         );
       });
     } catch (error) {
-      if (this.activeRunId === runId) this.activeRunId = null;
+      this.releaseLock(runId);
       throw error;
     }
   }
@@ -711,8 +741,7 @@ export class CallRunner {
 
       await this.finishRun(current, this.stopRequested ? 'stopped' : 'completed', null);
     } finally {
-      this.activeRunId = null;
-      this.stopRequested = false;
+      this.releaseLock(run.id);
     }
   }
 
@@ -721,8 +750,7 @@ export class CallRunner {
     try {
       await this.placeTestCall(call);
     } finally {
-      this.activeRunId = null;
-      this.stopRequested = false;
+      this.releaseLock(call.id);
     }
   }
 
@@ -738,7 +766,6 @@ export class CallRunner {
       endedAt: this.now().toISOString(),
       error,
     });
-    this.activeRunId = null;
   }
 
   /**

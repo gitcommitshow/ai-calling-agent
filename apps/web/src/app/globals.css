@@ -900,9 +900,20 @@ button.icon-action:hover:not(:disabled) {
 }
 
 .outside-window-actions a.outside-window-next,
-.outside-window-actions button.outside-window-danger {
+.outside-window-actions button.outside-window-danger,
+.outside-window-actions button.outside-window-go {
   background: var(--danger);
   color: #fafaf9;
+  border: 0;
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.outside-window-actions button.outside-window-go {
+  background: var(--accent);
+  color: var(--on-accent);
 }
 
 /* Inline notice that hours are closed; the dialog still blocks the action. */

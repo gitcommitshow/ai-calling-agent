@@ -16,7 +16,9 @@ export function localClockTime(now: Date, timeZone: string): string {
     minute: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(now);
-  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  // Some engines report midnight as 24:00, which sorts after every window end.
+  const hourPart = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  const hour = hourPart === '24' ? '00' : hourPart;
   const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
   // Always zero-pad: bare "9:30" string-compares as after "10:00".
   return `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;

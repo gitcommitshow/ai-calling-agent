@@ -7,6 +7,7 @@ import { notFound } from 'next/navigation';
 import { CampaignForm } from '../../../../../components/CampaignForm';
 import { Icon } from '../../../../../components/Icon';
 import { RunControls } from '../../../../../components/RunControls';
+import { displayedRun } from '../../../../../domain/displayed-run';
 import { orderByQueue } from '../../../../../domain/filter-order';
 import { formatIndianPhone } from '../../../../../domain/phone';
 import {
@@ -50,9 +51,7 @@ export default async function CampaignPage({
     ]);
     const queued = orderByQueue(guests, campaign.queue);
     const sampleGuest = queued[0] ?? PLACEHOLDER_GUEST;
-    // Runs come back newest first, so the latest one for this campaign is the
-    // one a reload should keep following.
-    const latestRun = runs.find((run) => run.campaignId === campaign.id) ?? null;
+    const latestRun = displayedRun(runs, campaign.id);
 
     return (
       <div className="stack">

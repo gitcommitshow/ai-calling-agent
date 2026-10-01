@@ -80,9 +80,12 @@ class FakeCarrier implements TelephonyPort {
   readonly dialed: string[] = [];
   readonly hungUp: string[] = [];
   readonly refuse = new Set<string>();
+  /** Highest number of calls open at once. Overlapping dials show up here. */
+  maxInFlight = 0;
 
   private readonly listeners: ((event: TelephonyEvent) => void)[] = [];
   private counter = 0;
+  private inFlight = 0;
 
   onEvent(listener: (event: TelephonyEvent) => void): void {
     this.listeners.push(listener);
@@ -93,16 +96,23 @@ class FakeCarrier implements TelephonyPort {
   }
 
   async dial({ attemptId, to }: { attemptId: string; to: string }) {
+    this.inFlight += 1;
+    this.maxInFlight = Math.max(this.maxInFlight, this.inFlight);
     this.dialed.push(to);
-    if (this.refuse.has(to)) throw new Error('dial refused by the carrier');
-
-    this.emit({ attemptId, kind: 'ringing' });
-    this.emit({ attemptId, kind: 'answered', channel: silentChannel });
-    return { providerCallId: `pc-${++this.counter}` };
+    try {
+      if (this.refuse.has(to)) throw new Error('dial refused by the carrier');
+      this.emit({ attemptId, kind: 'ringing' });
+      this.emit({ attemptId, kind: 'answered', channel: silentChannel });
+      return { providerCallId: `pc-${++this.counter}` };
+    } catch (error) {
+      this.inFlight -= 1;
+      throw error;
+    }
   }
 
   /** The guest ending the call, which is how every fake call here finishes. */
   endCall(attemptId: string): void {
+    if (this.inFlight > 0) this.inFlight -= 1;
     this.emit({ attemptId, kind: 'ended', reason: 'completed', detail: 'guest hung up' });
   }
 
@@ -365,6 +375,70 @@ describe('CallRunner', () => {
     expect(refused).to.equal(true);
     expect(await store.listRuns(event.id)).to.have.lengthOf(0);
     expect(timers.pending).to.have.lengthOf(0);
+  });
+
+  it('will not dial a due schedule beside a call that is still starting', async () => {
+    const asha = guest('asha', '+919876543210');
+    const vikram = guest('vikram', '+919876543211');
+    const queued = campaignFor([asha.id]);
+    const single = { ...campaignFor([vikram.id]), id: 'single-call-1234abcd' };
+    await store.replaceGuests(event.id, [asha, vikram]);
+    await store.putCampaign(queued);
+    await store.putCampaign(single);
+
+    const timers = new ManualTimers();
+    const runner = buildRunner(voice, timers);
+    const scheduled = await runner.scheduleRun(queued, new Date(NOW.getTime() + 60 * 60 * 1000));
+
+    let refused = false;
+    try {
+      await runner.startRun(queued, { kind: 'single', guestIds: [asha.id] });
+    } catch (error) {
+      refused = true;
+      expect((error as Error).message).to.include('already scheduled');
+    }
+    expect(refused).to.equal(true);
+    expect((await store.getRun(event.id, scheduled.id))?.status).to.equal('scheduled');
+
+    let releaseGuest: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseGuest = resolve;
+    });
+    let waitingForGuest = false;
+    const readGuest = store.getGuest.bind(store);
+    sinon.stub(store, 'getGuest').callsFake(async (eventId, guestId) => {
+      if (guestId === vikram.id) {
+        waitingForGuest = true;
+        await gate;
+      }
+      return readGuest(eventId, guestId);
+    });
+
+    const pendingStart = runner.startRun(single, { kind: 'single', guestIds: [vikram.id] });
+    await waitFor(async () => waitingForGuest, 'the guest lookup to start');
+    timers.fireSoonest();
+    await waitFor(async () => timers.pending.length === 1, 'the schedule to wait for the live call');
+
+    expect(telephony.dialed).to.deep.equal([]);
+    expect(timers.pending).to.have.lengthOf(1);
+    expect((await store.getRun(event.id, scheduled.id))?.status).to.equal('scheduled');
+
+    releaseGuest();
+    const started = await pendingStart;
+    await waitFor(
+      async () => (await store.getRun(event.id, started.id))?.status === 'completed',
+      'the one-guest call to finish',
+    );
+    expect(telephony.dialed).to.deep.equal([vikram.phone]);
+    expect(telephony.maxInFlight).to.equal(1);
+
+    timers.fireSoonest();
+    await waitFor(
+      async () => (await store.getRun(event.id, scheduled.id))?.status === 'completed',
+      'the scheduled run to complete',
+    );
+    expect(telephony.dialed).to.deep.equal([vikram.phone, asha.phone]);
+    expect(telephony.maxInFlight).to.equal(1);
   });
 });
 

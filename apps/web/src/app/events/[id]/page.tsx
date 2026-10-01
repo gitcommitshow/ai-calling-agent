@@ -11,6 +11,7 @@ import { GuestQueue } from '../../../components/GuestQueue';
 import { Icon } from '../../../components/Icon';
 import { OutsideHoursGate } from '../../../components/OutsideHoursGate';
 import { RemoveQueueGate } from '../../../components/RemoveQueueGate';
+import { isWithinCallingWindow } from '../../../domain/eligibility';
 import {
   getEvent,
   listAttempts,
@@ -20,7 +21,8 @@ import {
   loadSettings,
   ServerApiError,
 } from '../../../lib/server-api';
-import { formatInZone } from '../../../lib/time';
+import { formatInZone, zonedInputToIso } from '../../../lib/time';
+import type { Campaign } from '../../../domain/types';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,23 +64,31 @@ export default async function EventPage({
     const removing = campaigns.find(
       (campaign) => campaign.id === query.removeQueue && campaign.queue.length > 0,
     );
+    let outsideConfirm: boolean | null = null;
+    let confirmError: string | null = null;
+    if (confirmed && gateStep) {
+      const when = confirmInstant(confirmed, query.startsAt);
+      if ('error' in when) confirmError = when.error;
+      else outsideConfirm = !isWithinCallingWindow(when.at, confirmed.callingWindow);
+    }
 
     return (
       <div className="stack">
         {removing ? <RemoveQueueGate eventId={event.id} campaign={removing} /> : null}
-        {confirmed && gateStep ? (
+        {confirmed && gateStep && outsideConfirm !== null ? (
           <OutsideHoursGate
             eventId={event.id}
             campaign={confirmed}
             step={gateStep}
             guestId={query.guest}
             startsAt={query.startsAt}
+            outside={outsideConfirm}
             callingHoursMode={org.callingHoursMode}
           />
         ) : null}
-        {query.callError ? (
+        {confirmError || query.callError ? (
           <p className="notice error">
-            <Icon name="alert" /> {query.callError}
+            <Icon name="alert" /> {confirmError || query.callError}
           </p>
         ) : null}
         <div>
@@ -154,5 +164,23 @@ export default async function EventPage({
         <Icon name="alert" /> {(error as Error).message}
       </p>
     );
+  }
+}
+
+/** The instant a no-JS confirm is about, or why the typed time could not be read. */
+function confirmInstant(
+  campaign: Campaign,
+  startsAt: string | undefined,
+): { at: Date } | { error: string } {
+  if (!startsAt) return { at: new Date() };
+  try {
+    const iso = startsAt.endsWith('Z')
+      ? startsAt
+      : zonedInputToIso(startsAt, campaign.callingWindow.timezone);
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return { error: 'choose a date and time' };
+    return { at };
+  } catch (error) {
+    return { error: (error as Error).message || 'choose a date and time' };
   }
 }

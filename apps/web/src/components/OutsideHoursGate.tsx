@@ -1,7 +1,6 @@
 /**
- * Full-page confirmation for a dial outside calling hours. Rendered by the
- * server from the URL, so the warning still blocks the page when client
- * scripts have not attached.
+ * Full-page confirmation for a no-JS dial. Outside calling hours it warns
+ * twice. Inside hours it starts the call without storing an override.
  */
 import Link from 'next/link';
 import { Icon } from './Icon';
@@ -15,6 +14,8 @@ interface Props {
   step: '1' | '2';
   guestId?: string;
   startsAt?: string;
+  /** False when the chosen instant is inside the campaign window. */
+  outside: boolean;
   /** Strict mode refuses the dial. The second step is not offered. */
   callingHoursMode?: CallingHoursMode;
 }
@@ -25,6 +26,7 @@ export function OutsideHoursGate({
   step,
   guestId,
   startsAt,
+  outside,
   callingHoursMode = 'soft',
 }: Props) {
   const hours = `${campaign.callingWindow.start}-${campaign.callingWindow.end} ${campaign.callingWindow.timezone}`;
@@ -32,8 +34,39 @@ export function OutsideHoursGate({
   const next = new URLSearchParams({ confirm: campaign.id, step: '2' });
   if (guestId) next.set('guest', guestId);
   if (startsAt) next.set('startsAt', startsAt);
-  const strict = callingHoursMode === 'strict';
-  const finalStep = !strict && step === '2';
+  const strict = outside && callingHoursMode === 'strict';
+  const finalStep = outside && !strict && step === '2';
+
+  const startForm = (
+    <form action={`/events/${eventId}/confirm-run`} method="post">
+      <input type="hidden" name="campaignId" value={campaign.id} />
+      {guestId ? <input type="hidden" name="guestId" value={guestId} /> : null}
+      {startsAt ? <input type="hidden" name="startsAt" value={startsAt} /> : null}
+      <button type="submit" className={outside ? 'outside-window-danger' : 'outside-window-go'}>
+        {startsAt ? (outside ? 'Schedule anyway' : 'Schedule') : outside ? 'Call anyway' : 'Call now'}
+      </button>
+    </form>
+  );
+
+  if (!outside) {
+    return (
+      <div className="outside-window-backdrop">
+        <div className="outside-window-dialog" role="dialog" aria-modal="true">
+          <p className="outside-window-kicker">
+            <Icon name="phone" /> Ready to call
+          </p>
+          <h2>{startsAt ? 'Schedule this call' : 'Call now'}</h2>
+          <p>{campaign.name} is inside calling hours ({hours}).</p>
+          <div className="outside-window-actions">
+            <Link href={back} className="outside-window-cancel">
+              Cancel
+            </Link>
+            {startForm}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="outside-window-backdrop">
@@ -55,16 +88,7 @@ export function OutsideHoursGate({
           <Link href={back} className="outside-window-cancel">
             {strict ? 'Close' : 'Cancel'}
           </Link>
-          {finalStep ? (
-            <form action={`/events/${eventId}/confirm-run`} method="post">
-              <input type="hidden" name="campaignId" value={campaign.id} />
-              {guestId ? <input type="hidden" name="guestId" value={guestId} /> : null}
-              {startsAt ? <input type="hidden" name="startsAt" value={startsAt} /> : null}
-              <button type="submit" className="outside-window-danger">
-                {startsAt ? 'Schedule anyway' : 'Call anyway'}
-              </button>
-            </form>
-          ) : strict ? null : (
+          {finalStep ? startForm : strict ? null : (
             <Link href={`${back}?${next.toString()}`} className="outside-window-next">
               I understand the risk
             </Link>

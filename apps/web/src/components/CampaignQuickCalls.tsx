@@ -15,6 +15,7 @@ import {
   type OutsideWindowStep,
 } from './OutsideWindowConfirm';
 import { RemoveQueueConfirm } from './RemoveQueueConfirm';
+import { displayedRun } from '../domain/displayed-run';
 import { isWithinCallingWindow } from '../domain/eligibility';
 import type { CallingHoursMode } from '../domain/settings';
 import { summarizeSkips } from '../domain/run-skips';
@@ -79,7 +80,7 @@ export function CampaignQuickCalls({
   }, []);
 
   function runFor(campaignId: string): Run | null {
-    return overrides[campaignId] ?? runs.find((run) => run.campaignId === campaignId) ?? null;
+    return displayedRun(runs, campaignId, overrides[campaignId] ?? null);
   }
 
   const openIds = ready

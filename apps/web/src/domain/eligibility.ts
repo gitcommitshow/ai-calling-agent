@@ -5,6 +5,7 @@
  * stale between pressing start and reaching the guest.
  */
 import { canCallPhone } from './phone';
+import type { CallingHoursMode } from './settings';
 import type { Campaign, Event, Guest } from './types';
 
 export type Eligibility = { eligible: true } | { eligible: false; reason: string };
@@ -27,7 +28,10 @@ export function localClockTime(now: Date, timeZone: string): string {
     minute: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(now);
-  const hour = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  // Some engines report midnight as 24:00, which sorts after every window end.
+  // Keep this in step with apps/server/src/runner/guardrails.ts.
+  const hourPart = parts.find((part) => part.type === 'hour')?.value ?? '00';
+  const hour = hourPart === '24' ? '00' : hourPart;
   const minute = parts.find((part) => part.type === 'minute')?.value ?? '00';
   // Always zero-pad: bare "9:30" string-compares as after "10:00".
   return `${hour.padStart(2, '0')}:${minute.padStart(2, '0')}`;
@@ -36,6 +40,20 @@ export function localClockTime(now: Date, timeZone: string): string {
 export function isWithinCallingWindow(now: Date, window: Campaign['callingWindow']): boolean {
   const time = localClockTime(now, window.timezone);
   return time >= window.start && time < window.end;
+}
+
+/**
+ * Whether a start at `at` should store an outside-hours override.
+ * Strict mode never waives. Inside the window, a waiver would keep a long
+ * queue dialing after hours end.
+ */
+export function shouldWaiveCallingWindow(
+  at: Date,
+  window: Campaign['callingWindow'],
+  mode: CallingHoursMode,
+): boolean {
+  if (mode === 'strict') return false;
+  return !isWithinCallingWindow(at, window);
 }
 
 /** One guest against one campaign. The first failing rule is the reason shown. */
