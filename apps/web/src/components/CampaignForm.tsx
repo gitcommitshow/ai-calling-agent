@@ -269,7 +269,8 @@ export function CampaignForm({
         <h3>Fields to capture</h3>
         {fields.length === 0 ? <p className="empty small">No fields yet.</p> : null}
         {fields.map((field, index) => (
-          <div className="row" key={`${field.key}-${index}`}>
+          // Row identity stays on position so editing the key does not remount the input.
+          <div className="row" key={index}>
             <div>
               <label htmlFor={`field-key-${index}`}>Key</label>
               <input

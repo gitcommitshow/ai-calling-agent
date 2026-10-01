@@ -406,7 +406,7 @@ describe('CallRunner', () => {
     });
     let waitingForGuest = false;
     const readGuest = store.getGuest.bind(store);
-    sinon.stub(store, 'getGuest').callsFake(async (eventId, guestId) => {
+    sinon.stub(store, 'getGuest').callsFake(async (eventId: string, guestId: string) => {
       if (guestId === vikram.id) {
         waitingForGuest = true;
         await gate;
