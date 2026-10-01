@@ -3,6 +3,7 @@
  * app owns product rules, but persistence only ever sees well-formed records.
  */
 import { badRequest } from './http.ts';
+import { MAX_GUEST_ATTEMPTS } from '../runner/retry-cap.ts';
 import {
   CONTEXT_FIELD_IDS,
   isContextFieldId,
@@ -279,10 +280,23 @@ function parseCallingWindow(value: unknown): CallingWindow {
 }
 
 function parseRetryCap(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
-    throw badRequest('retryCap must be an integer between 1 and 10');
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_GUEST_ATTEMPTS
+  ) {
+    throw badRequest(`retryCap must be an integer between 1 and ${MAX_GUEST_ATTEMPTS}`);
   }
   return value;
+}
+
+/** One guest's attempt limit, or null to follow the campaign default again. */
+export function parseGuestRetryCap(body: unknown): number | null {
+  const record = asRecord(body, 'retry cap');
+  if (!('retryCap' in record)) throw badRequest('retryCap is required');
+  if (record.retryCap === null) return null;
+  return parseRetryCap(record.retryCap);
 }
 
 /** Whole seconds for org call limits, within a named range. */

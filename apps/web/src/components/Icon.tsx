@@ -27,6 +27,7 @@ export type IconName =
   | 'speech'
   | 'stack'
   | 'ticket'
+  | 'undo'
   | 'upload'
   | 'users'
   | 'voicemail'
@@ -112,6 +113,12 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M4 9V7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a3 3 0 0 0 0 6v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a3 3 0 0 0 0-6z" />
       <path d="M12 8v8" />
+    </>
+  ),
+  undo: (
+    <>
+      <path d="M4 11h9a5 5 0 1 1 0 7H9" />
+      <path d="M8 7L4 11l4 4" />
     </>
   ),
   upload: (

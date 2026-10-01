@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { CampaignQuickCalls } from './CampaignQuickCalls';
+import { GuestRetryCap } from './GuestRetryCap';
 import { Icon } from './Icon';
 import {
   OutsideWindowConfirm,
@@ -21,10 +22,12 @@ import type { CallingHoursMode } from '../domain/settings';
 import {
   checkEligibility,
   countAttemptsByGuest,
+  latestAttemptByGuest,
   type Eligibility,
 } from '../domain/eligibility';
 import { latestSkipByGuest } from '../domain/run-skips';
 import { buildQueue, filterGuests, moveInQueue, ticketNamesOf } from '../domain/filter-order';
+import { withGuestRetryCap } from '../domain/retry-cap';
 import { formatIndianPhone } from '../domain/phone';
 import {
   APPROVAL_STATUSES,
@@ -43,6 +46,19 @@ import {
 
 /** Sentinel for the queue dropdown's "add a campaign" row. Not a stored id. */
 const ADD_CAMPAIGN = '__add_campaign__';
+
+/** Apply attempt-limit edits the page has not reloaded yet. */
+function campaignWithRetryEdits(
+  current: Campaign,
+  edits: Record<string, number | null> | undefined,
+): Campaign {
+  if (!edits) return current;
+  let retryCapOverrides = current.retryCapOverrides;
+  for (const [guestId, cap] of Object.entries(edits)) {
+    retryCapOverrides = withGuestRetryCap(retryCapOverrides, guestId, cap);
+  }
+  return { ...current, retryCapOverrides };
+}
 
 /**
  * How often a single-guest call is checked, and for how long, before the card
@@ -93,6 +109,8 @@ export function GuestQueue({
   const [movedGuestId, setMovedGuestId] = useState<string | null>(null);
   const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
   const [pendingOutsideGuest, setPendingOutsideGuest] = useState<Guest | null>(null);
+  /** Per campaign, the attempt limit just saved for a guest. Null means follow the campaign default. */
+  const [retryEdits, setRetryEdits] = useState<Record<string, Record<string, number | null>>>({});
 
   const knownCampaigns = useMemo(() => {
     const byId = new Map(campaigns.map((item) => [item.id, item]));
@@ -134,17 +152,31 @@ export function GuestQueue({
     });
   }, [guests, statuses, ticketName, search, queue]);
 
+  const attemptsByGuest = useMemo(
+    () => (campaign ? countAttemptsByGuest(attempts, campaign.id) : {}),
+    [attempts, campaign],
+  );
+
+  const latestByGuest = useMemo(
+    () => (campaign ? latestAttemptByGuest(attempts, campaign.id) : {}),
+    [attempts, campaign],
+  );
+
+  const campaignForCalls = useMemo(
+    () => (campaign ? campaignWithRetryEdits(campaign, retryEdits[campaign.id]) : undefined),
+    [campaign, retryEdits],
+  );
+
   const eligibility = useMemo(() => {
-    if (!campaign) return new Map<string, Eligibility>();
-    const attemptsByGuest = countAttemptsByGuest(attempts, campaign.id);
-    const withQueue = { ...campaign, queue };
+    if (!campaignForCalls) return new Map<string, Eligibility>();
+    const withQueue = { ...campaignForCalls, queue };
     return new Map(
       guests.map((guest) => [
         guest.id,
         checkEligibility(guest, { event, campaign: withQueue, attemptsByGuest, now }),
       ]),
     );
-  }, [attempts, campaign, event, guests, now, queue]);
+  }, [attemptsByGuest, campaignForCalls, event, guests, now, queue]);
 
   const queuePosition = useMemo(
     () => new Map(queue.map((guestId, index) => [guestId, index + 1])),
@@ -432,6 +464,25 @@ export function GuestQueue({
             <Icon name="alert" />
             <span>{callResult}</span>
           </p>
+        ) : null}
+
+        {campaignForCalls ? (
+          <GuestRetryCap
+            campaignId={campaignForCalls.id}
+            guestId={guest.id}
+            guestName={guest.name}
+            campaignDefault={campaignForCalls.retryCap}
+            override={campaignForCalls.retryCapOverrides?.[guest.id]}
+            attempts={attemptsByGuest[guest.id] ?? 0}
+            latest={latestByGuest[guest.id] ?? null}
+            onSaved={(retryCap) => {
+              const id = campaignForCalls.id;
+              setRetryEdits((current) => ({
+                ...current,
+                [id]: { ...current[id], [guest.id]: retryCap },
+              }));
+            }}
+          />
         ) : null}
 
         <div className="entity-card-foot">

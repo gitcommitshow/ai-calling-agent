@@ -5,6 +5,7 @@
  * stale between the organizer pressing start and the guest being reached.
  */
 import type { AttemptRecord, CampaignRecord, EventRecord, GuestRecord } from '../storage/types.ts';
+import { retryCapForGuest } from './retry-cap.ts';
 
 export type Guardrail = { ok: true } | { ok: false; reason: string };
 
@@ -133,8 +134,9 @@ export function checkGuardrails(guest: GuestRecord, ctx: GuardrailContext): Guar
   }
 
   const attempts = attemptsByGuest[guest.id] ?? 0;
-  if (!ctx.waiveRetryCap && attempts >= campaign.retryCap) {
-    return { ok: false, reason: `retry cap reached (${attempts}/${campaign.retryCap})` };
+  const retryCap = retryCapForGuest(campaign, guest.id);
+  if (!ctx.waiveRetryCap && attempts >= retryCap) {
+    return { ok: false, reason: `retry cap reached (${attempts}/${retryCap})` };
   }
 
   const waived = ctx.waiveCallingWindow === true && ctx.strictCallingHours !== true;

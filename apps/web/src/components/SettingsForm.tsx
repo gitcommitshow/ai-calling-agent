@@ -17,6 +17,7 @@ import {
 } from '../domain/settings';
 import type { CampaignType } from '../domain/types';
 import { normalizeIndianPhone } from '../domain/phone';
+import { clampGuestAttempts, MAX_GUEST_ATTEMPTS } from '../domain/retry-cap';
 
 interface Props {
   initial: OrgSettings;
@@ -31,7 +32,7 @@ export function SettingsForm({ initial, callingHoursMode }: Props) {
   const [testNumber, setTestNumber] = useState(initial.testNumber ?? '');
   const [windowStart, setWindowStart] = useState(initial.callingWindow.start);
   const [windowEnd, setWindowEnd] = useState(initial.callingWindow.end);
-  const [retryCap, setRetryCap] = useState(initial.retryCap);
+  const [retryCap, setRetryCap] = useState(clampGuestAttempts(initial.retryCap));
   const [silenceSeconds, setSilenceSeconds] = useState(initial.silenceSeconds);
   const [maxCallSeconds, setMaxCallSeconds] = useState(initial.maxCallSeconds);
   const [dialTimeoutSeconds, setDialTimeoutSeconds] = useState(initial.dialTimeoutSeconds);
@@ -157,15 +158,21 @@ export function SettingsForm({ initial, callingHoursMode }: Props) {
           </div>
           <div>
             <label htmlFor="org-retry-cap">Default attempts per guest</label>
-            <input
-              id="org-retry-cap"
-              type="number"
-              min={1}
-              max={10}
-              value={retryCap}
-              onChange={(changeEvent) => setRetryCap(Number(changeEvent.target.value))}
-            />
-            <SettingHint detail="New campaigns copy this number. Each campaign can raise or lower its own retry cap afterward. The campaign value is what the runner checks.">
+            <div className="attempt-slider">
+              <input
+                id="org-retry-cap"
+                type="range"
+                min={1}
+                max={MAX_GUEST_ATTEMPTS}
+                step={1}
+                value={retryCap}
+                onChange={(changeEvent) =>
+                  setRetryCap(clampGuestAttempts(Number(changeEvent.target.value)))
+                }
+              />
+              <span className="attempt-slider-value">{retryCap}</span>
+            </div>
+            <SettingHint detail={`New campaigns copy this number. At most ${MAX_GUEST_ATTEMPTS}. Each campaign can raise or lower its own retry cap afterward. The campaign value is what the runner checks.`}>
               Seed for new campaigns. The campaign&apos;s own retry cap is enforced at dial time.
             </SettingHint>
           </div>

@@ -718,6 +718,102 @@ th {
   margin-left: auto;
 }
 
+.queue-list li.queue-person {
+  flex-wrap: wrap;
+}
+
+.queue-person .truncate {
+  flex: 1 1 6rem;
+}
+
+.queue-person .retry-cap {
+  margin-left: auto;
+  margin-top: 0;
+}
+
+.queue-person .phone {
+  margin-left: 0;
+}
+
+.retry-cap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.attempt-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.875rem;
+}
+
+.attempt-meter.custom {
+  color: var(--text);
+}
+
+.attempt-meter.full {
+  color: var(--danger);
+}
+
+.attempt-outcome.answered {
+  color: var(--queue-armed-ink);
+}
+
+.attempt-outcome.failed,
+.attempt-outcome.declined {
+  color: var(--danger);
+}
+
+.retry-cap input[type='range'] {
+  width: 5.5rem;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--accent);
+}
+
+.attempt-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.attempt-slider input[type='range'] {
+  width: 8rem;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--accent);
+}
+
+.attempt-slider-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 1ch;
+}
+
+button.icon-button {
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--text-subtle);
+}
+
+button.icon-button:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  color: var(--text);
+}
+
+.retry-cap-error {
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
 /* One full-width bar per queue, inside the call queue section. */
 .queue-bars {
   list-style: none;

@@ -59,7 +59,7 @@ export class JsonStore implements Storage {
       contextFields: stored.contextFields ?? defaults.contextFields,
       testNumber: typeof stored.testNumber === 'string' ? stored.testNumber : null,
       callingWindow: normalizeCallingWindow(stored.callingWindow, defaults.callingWindow),
-      retryCap: positiveLimit(stored.retryCap, defaults.retryCap, 1, 10),
+      retryCap: clampRetryCap(stored.retryCap, defaults.retryCap),
       silenceSeconds: positiveLimit(stored.silenceSeconds, defaults.silenceSeconds, 5, 600),
       maxCallSeconds: positiveLimit(stored.maxCallSeconds, defaults.maxCallSeconds, 30, 3600),
       dialTimeoutSeconds: positiveLimit(
@@ -245,11 +245,39 @@ export class JsonStore implements Storage {
  * event-level prompts keep working until the organizer opts into the master.
  */
 function normalizeCampaign(campaign: CampaignRecord): CampaignRecord {
-  return {
+  const normalized: CampaignRecord = {
     ...campaign,
     useMasterPrompt: campaign.useMasterPrompt === true,
     purpose: typeof campaign.purpose === 'string' ? campaign.purpose : '',
+    retryCap: clampRetryCap(campaign.retryCap, 1),
   };
+  const retryCapOverrides = normalizeRetryCapOverrides(campaign.retryCapOverrides);
+  if (retryCapOverrides) normalized.retryCapOverrides = retryCapOverrides;
+  else delete normalized.retryCapOverrides;
+  return normalized;
+}
+
+/**
+ * Attempt ceiling. Keep in step with MAX_GUEST_ATTEMPTS in runner/retry-cap.ts.
+ * Values above it clamp down so an older file cannot allow more than five.
+ */
+function clampRetryCap(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return fallback;
+  return Math.min(5, Math.max(1, value));
+}
+
+/** Drop caps that are not a whole number of at least 1, and clamp the rest to the ceiling. */
+function normalizeRetryCapOverrides(
+  value: CampaignRecord['retryCapOverrides'],
+): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const overrides: Record<string, number> = {};
+  for (const [guestId, cap] of Object.entries(value)) {
+    if (!SAFE_ID.test(guestId) || guestId.includes('..')) continue;
+    if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1) continue;
+    overrides[guestId] = Math.min(5, cap);
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 /** Older guest files have no origin. Those guests came from an import. */

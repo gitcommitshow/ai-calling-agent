@@ -5,8 +5,9 @@
  * stale between pressing start and reaching the guest.
  */
 import { canCallPhone } from './phone';
+import { retryCapForGuest } from './retry-cap';
 import type { CallingHoursMode } from './settings';
-import type { Campaign, Event, Guest } from './types';
+import type { AttemptStatus, CallOutcome, Campaign, Event, Guest } from './types';
 
 export type Eligibility = { eligible: true } | { eligible: false; reason: string };
 
@@ -78,8 +79,9 @@ export function checkEligibility(guest: Guest, ctx: EligibilityContext): Eligibi
   }
 
   const attempts = attemptsByGuest[guest.id] ?? 0;
-  if (!ctx.waiveRetryCap && attempts >= campaign.retryCap) {
-    return { eligible: false, reason: `retry cap reached (${attempts}/${campaign.retryCap})` };
+  const retryCap = retryCapForGuest(campaign, guest.id);
+  if (!ctx.waiveRetryCap && attempts >= retryCap) {
+    return { eligible: false, reason: `retry cap reached (${attempts}/${retryCap})` };
   }
 
   if (!isWithinCallingWindow(now, campaign.callingWindow)) {
@@ -88,6 +90,42 @@ export function checkEligibility(guest: Guest, ctx: EligibilityContext): Eligibi
   }
 
   return { eligible: true };
+}
+
+/** The newest call for one guest, so a list can show how that call ended. */
+export interface GuestAttemptSnapshot {
+  outcome: CallOutcome | null;
+  status: AttemptStatus;
+}
+
+/** Latest attempt per guest for one campaign, by start time. */
+export function latestAttemptByGuest(
+  attempts: {
+    campaignId: string;
+    guestId: string;
+    startedAt: string;
+    outcome: CallOutcome | null;
+    status: AttemptStatus;
+  }[],
+  campaignId: string,
+): Record<string, GuestAttemptSnapshot> {
+  const latest: Record<string, GuestAttemptSnapshot & { startedAt: string }> = {};
+  for (const attempt of attempts) {
+    if (attempt.campaignId !== campaignId) continue;
+    const current = latest[attempt.guestId];
+    if (current && current.startedAt >= attempt.startedAt) continue;
+    latest[attempt.guestId] = {
+      outcome: attempt.outcome,
+      status: attempt.status,
+      startedAt: attempt.startedAt,
+    };
+  }
+  return Object.fromEntries(
+    Object.entries(latest).map(([guestId, snapshot]) => [
+      guestId,
+      { outcome: snapshot.outcome, status: snapshot.status },
+    ]),
+  );
 }
 
 /** Attempt counts per guest, keyed for the eligibility context. */

@@ -11,6 +11,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
 import { SettingHint } from './SettingHint';
 import { assemblePrompt, PROMPT_PLACEHOLDERS } from '../domain/prompt';
+import { clampGuestAttempts, MAX_GUEST_ATTEMPTS } from '../domain/retry-cap';
 import { sameCallingWindow, type CallingHoursMode, type OrgSettings } from '../domain/settings';
 import type { Campaign, CaptureField, Event, Guest, Language } from '../domain/types';
 
@@ -42,7 +43,7 @@ export function CampaignForm({
   const [fields, setFields] = useState<CaptureField[]>(campaign.fields);
   const [windowStart, setWindowStart] = useState(campaign.callingWindow.start);
   const [windowEnd, setWindowEnd] = useState(campaign.callingWindow.end);
-  const [retryCap, setRetryCap] = useState(campaign.retryCap);
+  const [retryCap, setRetryCap] = useState(clampGuestAttempts(campaign.retryCap));
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -186,24 +187,28 @@ export function CampaignForm({
         </div>
         <div>
           <label htmlFor="retry-cap">Attempts allowed per guest</label>
-          <input
-            id="retry-cap"
-            type="number"
-            min={1}
-            max={10}
-            value={retryCap}
-            onChange={(changeEvent) => setRetryCap(Number(changeEvent.target.value))}
-          />
+          <div className="attempt-slider">
+            <input
+              id="retry-cap"
+              type="range"
+              min={1}
+              max={MAX_GUEST_ATTEMPTS}
+              step={1}
+              value={retryCap}
+              onChange={(changeEvent) => setRetryCap(clampGuestAttempts(Number(changeEvent.target.value)))}
+            />
+            <span className="attempt-slider-value">{retryCap}</span>
+          </div>
           <SettingHint
             detail={
               usesOrgRetry
-                ? 'Matches the org default. The runner checks this campaign value before each dial.'
-                : `Overrides the org default of ${settings.retryCap}. The campaign value is enforced; the org default only seeds new campaigns.`
+                ? `Matches the org default. The runner checks this campaign value before each dial. At most ${MAX_GUEST_ATTEMPTS}. A guest can have their own limit. Slide that guest back to this number to follow the campaign again.`
+                : `Overrides the org default of ${settings.retryCap}. This campaign value is the default for guests on this event. At most ${MAX_GUEST_ATTEMPTS}. A guest can have their own limit. Slide that guest back to this number to follow the campaign again.`
             }
           >
             {usesOrgRetry
-              ? 'Matches org default. Enforced from this campaign.'
-              : `Overrides org default (${settings.retryCap}). This campaign value is enforced.`}
+              ? 'Campaign default. A guest can have their own limit.'
+              : `Overrides org default (${settings.retryCap}). Guests can still differ.`}
           </SettingHint>
         </div>
       </div>

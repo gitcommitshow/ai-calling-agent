@@ -185,6 +185,11 @@ export interface CampaignRecord {
   fields: CaptureField[];
   callingWindow: CallingWindow;
   retryCap: number;
+  /**
+   * Per-guest attempt limits. Guests missing from this map use retryCap,
+   * the default for this campaign. Omitted when every guest follows that default.
+   */
+  retryCapOverrides?: Record<string, number>;
   voiceBackendOrder: VoiceBackend[];
   queue: string[];
   createdAt: string;

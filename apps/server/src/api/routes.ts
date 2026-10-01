@@ -12,6 +12,7 @@ import {
   parseCampaignPatch,
   parseEventInput,
   parseGuestImportInput,
+  parseGuestRetryCap,
   parseManualGuestInput,
   parseOrgSettingsInput,
   parseRunStartInput,
@@ -35,6 +36,11 @@ import type {
   TestCallPromptSource,
   TestCallRecord,
 } from '../storage/types.ts';
+import {
+  retryCapOverridesForGuests,
+  sameRetryCapOverrides,
+  withGuestRetryCap,
+} from '../runner/retry-cap.ts';
 import { GuardrailError, RunConflictError, type CallRunner } from '../runner/runner.ts';
 import type { TelephonyPort } from '../telephony/types.ts';
 
@@ -260,14 +266,20 @@ async function resolveTestCall(
   };
 }
 
-/** Drop queue entries whose guest is no longer on the list after an import. */
+/** Drop queue entries and per-guest attempt limits whose guest is no longer on the list. */
 async function pruneQueues(storage: Storage, eventId: string, guestIds: Set<string>): Promise<number> {
   let removed = 0;
   for (const campaign of await storage.listCampaigns(eventId)) {
     const queue = campaign.queue.filter((guestId) => guestIds.has(guestId));
-    if (queue.length === campaign.queue.length) continue;
+    const retryCapOverrides = retryCapOverridesForGuests(campaign.retryCapOverrides, guestIds);
+    const queueChanged = queue.length !== campaign.queue.length;
+    const overridesChanged = !sameRetryCapOverrides(retryCapOverrides, campaign.retryCapOverrides);
+    if (!queueChanged && !overridesChanged) continue;
     removed += campaign.queue.length - queue.length;
-    await storage.putCampaign({ ...campaign, queue, updatedAt: new Date().toISOString() });
+    const next: CampaignRecord = { ...campaign, queue, updatedAt: new Date().toISOString() };
+    if (retryCapOverrides) next.retryCapOverrides = retryCapOverrides;
+    else delete next.retryCapOverrides;
+    await storage.putCampaign(next);
   }
   return removed;
 }
@@ -476,6 +488,27 @@ const routes: Route[] = [
       ...patch,
       updatedAt: new Date().toISOString(),
     };
+    await storage.putCampaign(campaign);
+    return { status: 200, body: { campaign } };
+  }),
+
+  /**
+   * Set one guest's attempt limit, or clear it so they follow the campaign default again.
+   * The campaign retry cap stays the default for every guest without an override.
+   */
+  route('PUT', '/campaigns/:campaignId/guests/:guestId/retry-cap', async ({ params, body, storage }) => {
+    const existing = await loadCampaign(storage, params.campaignId!);
+    const guest = await storage.getGuest(existing.eventId, params.guestId!);
+    if (!guest) throw notFound(`guest not found on this event: ${params.guestId}`);
+
+    const retryCap = parseGuestRetryCap(body);
+    const retryCapOverrides = withGuestRetryCap(existing.retryCapOverrides, guest.id, retryCap);
+    const campaign: CampaignRecord = {
+      ...existing,
+      updatedAt: new Date().toISOString(),
+    };
+    if (retryCapOverrides) campaign.retryCapOverrides = retryCapOverrides;
+    else delete campaign.retryCapOverrides;
     await storage.putCampaign(campaign);
     return { status: 200, body: { campaign } };
   }),

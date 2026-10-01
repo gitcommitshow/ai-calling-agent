@@ -158,6 +158,26 @@ export async function updateCampaign(
   ).campaign;
 }
 
+/**
+ * Set one guest's attempt limit. Null clears it so the guest follows the
+ * campaign default again.
+ */
+export async function setGuestRetryCap(
+  campaignId: string,
+  guestId: string,
+  retryCap: number | null,
+): Promise<Campaign> {
+  return (
+    await request<{ campaign: Campaign }>(
+      `/campaigns/${campaignId}/guests/${encodeURIComponent(guestId)}/retry-cap`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ retryCap }),
+      },
+    )
+  ).campaign;
+}
+
 /** Replace the event details, including the brief the agent may say. */
 export async function updateEvent(
   eventId: string,

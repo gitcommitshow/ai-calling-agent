@@ -5,14 +5,17 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { CampaignForm } from '../../../../../components/CampaignForm';
+import { GuestRetryCap } from '../../../../../components/GuestRetryCap';
 import { Icon } from '../../../../../components/Icon';
 import { RunControls } from '../../../../../components/RunControls';
 import { displayedRun } from '../../../../../domain/displayed-run';
+import { countAttemptsByGuest, latestAttemptByGuest } from '../../../../../domain/eligibility';
 import { orderByQueue } from '../../../../../domain/filter-order';
 import { formatIndianPhone } from '../../../../../domain/phone';
 import {
   getCampaign,
   getEvent,
+  listAttempts,
   listGuests,
   listRuns,
   loadSettings,
@@ -42,14 +45,17 @@ export default async function CampaignPage({
   const { id, campaignId } = await params;
 
   try {
-    const [event, campaign, guests, runs, org] = await Promise.all([
+    const [event, campaign, guests, runs, attempts, org] = await Promise.all([
       getEvent(id),
       getCampaign(campaignId),
       listGuests(id),
       listRuns(id),
+      listAttempts(id),
       loadSettings(),
     ]);
     const queued = orderByQueue(guests, campaign.queue);
+    const attemptsByGuest = countAttemptsByGuest(attempts, campaign.id);
+    const latestByGuest = latestAttemptByGuest(attempts, campaign.id);
     const sampleGuest = queued[0] ?? PLACEHOLDER_GUEST;
     const latestRun = displayedRun(runs, campaign.id);
 
@@ -105,9 +111,18 @@ export default async function CampaignPage({
           ) : (
             <ol className="queue-list">
               {queued.map((guest, index) => (
-                <li key={guest.id}>
+                <li key={guest.id} className="queue-person">
                   <span className="position-badge">{index + 1}</span>
                   <span className="truncate">{guest.name}</span>
+                  <GuestRetryCap
+                    campaignId={campaign.id}
+                    guestId={guest.id}
+                    guestName={guest.name}
+                    campaignDefault={campaign.retryCap}
+                    override={campaign.retryCapOverrides?.[guest.id]}
+                    attempts={attemptsByGuest[guest.id] ?? 0}
+                    latest={latestByGuest[guest.id] ?? null}
+                  />
                   <span className="phone small muted">{formatIndianPhone(guest.phone)}</span>
                 </li>
               ))}
