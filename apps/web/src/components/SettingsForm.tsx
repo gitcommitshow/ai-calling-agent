@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Org settings editor: master prompts, context allowlist, dialing defaults,
+ * Org settings editor: agent personality, master prompts, context allowlist, dialing defaults,
  * runtime call limits, and the models and providers every live call uses.
  */
 import { useRouter } from 'next/navigation';
@@ -10,6 +10,7 @@ import { AgentHangupSettings } from './AgentHangupSettings';
 import { Icon } from './Icon';
 import { SettingHint } from './SettingHint';
 import {
+  AGENT_PERSONALITY_MAX,
   CONTEXT_FIELD_IDS,
   CONTEXT_FIELD_META,
   EXTRACTION_PROVIDERS,
@@ -49,6 +50,7 @@ export function SettingsForm({
   voiceHangup,
 }: Props) {
   const router = useRouter();
+  const [personality, setPersonality] = useState(initial.agentPersonality);
   const [preEvent, setPreEvent] = useState(initial.masterPrompts['pre-event']);
   const [postEvent, setPostEvent] = useState(initial.masterPrompts['post-event']);
   const [testNumber, setTestNumber] = useState(initial.testNumber ?? '');
@@ -58,6 +60,8 @@ export function SettingsForm({
   const [silenceSeconds, setSilenceSeconds] = useState(initial.silenceSeconds);
   const [maxCallSeconds, setMaxCallSeconds] = useState(initial.maxCallSeconds);
   const [dialTimeoutSeconds, setDialTimeoutSeconds] = useState(initial.dialTimeoutSeconds);
+  const [openingWaitSeconds, setOpeningWaitSeconds] = useState(initial.openingWaitSeconds);
+  const [noResponseSeconds, setNoResponseSeconds] = useState(initial.noResponseSeconds);
   const [telephonyProvider, setTelephonyProvider] = useState<TelephonyProviderId>(
     initial.telephonyProvider,
   );
@@ -96,10 +100,16 @@ export function SettingsForm({
         if (!parsed.phone) throw new Error(parsed.reason ?? 'invalid test number');
         normalizedTestNumber = parsed.phone;
       }
+      if (openingWaitSeconds >= noResponseSeconds) {
+        throw new Error(
+          'The wait before the agent speaks must be shorter than the hangup if the guest never speaks.',
+        );
+      }
       const response = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
+          agentPersonality: personality,
           masterPrompts: {
             'pre-event': preEvent,
             'post-event': postEvent,
@@ -115,6 +125,8 @@ export function SettingsForm({
           silenceSeconds,
           maxCallSeconds,
           dialTimeoutSeconds,
+          openingWaitSeconds,
+          noResponseSeconds,
           extraction: { provider: extractionProvider, model: extractionModel.trim() },
           voiceProvider,
           telephonyProvider,
@@ -123,7 +135,7 @@ export function SettingsForm({
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'could not save settings');
       setMessage(
-        'Settings saved. New campaigns pick up dialing defaults. Call limits and the model choices apply on the next dial.',
+        'Settings saved. New campaigns pick up dialing defaults. The personality, call limits, and model choices apply on the next dial.',
       );
       router.refresh();
     } catch (saveError) {
@@ -308,11 +320,41 @@ export function SettingsForm({
       <section className="card stack">
         <div>
           <h2>Live call limits</h2>
-          <SettingHint detail="These apply to every guest call and pipeline test. Campaigns cannot override them. Changing a value affects the next dial, not a call already on the line. When the agent hangup tool is off, or the agent never uses it, these limits are what drops the line.">
+          <SettingHint detail="These apply to every guest call and pipeline test. Campaigns cannot override them. Changing a value affects the next dial, not a call already on the line. The opening wait must be shorter than the hangup for a guest who never speaks. After the guest has spoken, the silence limit hangs up a quiet line. When the agent hangup tool is off, or the agent never uses it, these limits are what drops the line.">
             Enforced on every live call. Campaign settings cannot override these.
           </SettingHint>
         </div>
         <div className="grid">
+          <div>
+            <label htmlFor="opening-wait-seconds">Wait before the agent speaks (seconds)</label>
+            <input
+              id="opening-wait-seconds"
+              type="number"
+              min={1}
+              max={30}
+              value={openingWaitSeconds}
+              required
+              onChange={(changeEvent) => setOpeningWaitSeconds(Number(changeEvent.target.value))}
+            />
+            <SettingHint detail="From the moment the guest answers. If they speak sooner, the agent replies to them and does not also start its own greeting.">
+              If the guest is still quiet, the agent starts the call.
+            </SettingHint>
+          </div>
+          <div>
+            <label htmlFor="no-response-seconds">Hang up if the guest never speaks (seconds)</label>
+            <input
+              id="no-response-seconds"
+              type="number"
+              min={5}
+              max={120}
+              value={noResponseSeconds}
+              required
+              onChange={(changeEvent) => setNoResponseSeconds(Number(changeEvent.target.value))}
+            />
+            <SettingHint detail="Also measured from the answer. This must be longer than the wait before the agent speaks. After the guest has spoken, Silence before hangup takes over.">
+              A pickup with no guest speech ends at this time.
+            </SettingHint>
+          </div>
           <div>
             <label htmlFor="silence-seconds">Silence before hangup (seconds)</label>
             <input
@@ -353,6 +395,26 @@ export function SettingsForm({
       </section>
 
       <AgentHangupSettings initial={voiceHangup} />
+
+      <section className="card stack">
+        <div>
+          <h2>Agent personality</h2>
+          <SettingHint detail="Added to every guest call and every event test, including a campaign that uses its own prompt. Leave it blank to add no extra style. Event facts, timing, and place belong in the master prompts and the event brief, not here.">
+            How the agent talks on every call. Tone and length only. Event facts stay in the prompts
+            below.
+          </SettingHint>
+        </div>
+
+        <div>
+          <label htmlFor="agent-personality">Personality</label>
+          <textarea
+            id="agent-personality"
+            value={personality}
+            maxLength={AGENT_PERSONALITY_MAX}
+            onChange={(changeEvent) => setPersonality(changeEvent.target.value)}
+          />
+        </div>
+      </section>
 
       <section className="card stack">
         <div>

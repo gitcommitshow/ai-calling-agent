@@ -24,6 +24,7 @@ import type {
 } from './types.ts';
 import {
   defaultOrgSettings,
+  normalizeAgentPersonality,
   normalizeExtraction,
   normalizeTelephonyProvider,
   normalizeVoiceProvider,
@@ -63,6 +64,10 @@ export class JsonStore implements Storage {
     return {
       ...seeded,
       ...stored,
+      agentPersonality: normalizeAgentPersonality(
+        stored.agentPersonality,
+        seeded.agentPersonality,
+      ),
       masterPrompts: {
         ...seeded.masterPrompts,
         ...(stored.masterPrompts ?? {}),
@@ -79,6 +84,7 @@ export class JsonStore implements Storage {
         10,
         180,
       ),
+      ...normalizeOpeningLimits(stored, seeded),
       extraction: normalizeExtraction(stored.extraction, seeded.extraction),
       voiceProvider: normalizeVoiceProvider(stored.voiceProvider, seeded.voiceProvider),
       telephonyProvider: normalizeTelephonyProvider(
@@ -369,6 +375,32 @@ function positiveLimit(
     return fallback;
   }
   return value;
+}
+
+/**
+ * Opening wait and the no-response hangup. A missing or invalid value uses the
+ * seed. The wait stays shorter than the hangup so the agent can still speak.
+ */
+function normalizeOpeningLimits(
+  stored: { openingWaitSeconds?: number; noResponseSeconds?: number },
+  seeded: { openingWaitSeconds: number; noResponseSeconds: number },
+): { openingWaitSeconds: number; noResponseSeconds: number } {
+  const noResponseSeconds = positiveLimit(
+    stored.noResponseSeconds,
+    seeded.noResponseSeconds,
+    5,
+    120,
+  );
+  let openingWaitSeconds = positiveLimit(
+    stored.openingWaitSeconds,
+    seeded.openingWaitSeconds,
+    1,
+    30,
+  );
+  if (openingWaitSeconds >= noResponseSeconds) {
+    openingWaitSeconds = Math.max(1, noResponseSeconds - 1);
+  }
+  return { openingWaitSeconds, noResponseSeconds };
 }
 
 /**

@@ -88,9 +88,9 @@ For each guest it creates the attempt, dials, and starts the voice backend when 
 
 A run is a stored record. The organizer can start it, watch it, stop it, and see afterwards which guests were skipped and why. Pipeline tests reuse that dial and voice bridge, skip guest guardrails, and persist a separate record (D13).
 
-The runner assembles the prompt itself, rather than being handed one, because it works long after the organizer's request returned. That assembly mirrors the web app's preview module; the README promises the preview is the text a call uses, so the two change together (D5 keeps them unshared for now). Assembly always appends the event brief and the shared unanswered-question rule (D15).
+The runner assembles the prompt itself, rather than being handed one, because it works long after the organizer's request returned. That assembly mirrors the web app's preview module; the README promises the preview is the text a call uses, so the two change together (D5 keeps them unshared for now). Assembly always appends the event brief, the org personality and the logistics line (D19), and the shared unanswered-question rule (D15).
 
-**Server API.** A JSON HTTP API with operations for the web app: manage org settings (master prompts, context allowlist, fixed test number), manage events (including a Luma link import and the event description), import guests, list and filter guests, manage campaigns (prompt source, fields, language, voice backend order, calling window, queue order), start and stop a run, call one guest, place a follow-up call for an open question, mark an open question resolved, place and list pipeline tests, check credits, and read results and summaries. The server also exposes the telephony callback endpoints and the audio WebSocket endpoint. These are defined by the telephony adapter and only reached by the telephony provider.
+**Server API.** A JSON HTTP API with operations for the web app: manage org settings (agent personality, master prompts, context allowlist, fixed test number), manage events (including a Luma link import and the event description), import guests, list and filter guests, manage campaigns (prompt source, fields, language, voice backend order, calling window, queue order), start and stop a run, call one guest, place a follow-up call for an open question, mark an open question resolved, place and list pipeline tests, check credits, and read results and summaries. The server also exposes the telephony callback endpoints and the audio WebSocket endpoint. These are defined by the telephony adapter and only reached by the telephony provider.
 
 Calling endpoints refuse clearly instead of half-working. A server with no adapters wired in answers 501. A missing credential answers 503 and names the variable to set. A second run or test call while one is going answers 409. A guest a guardrail refuses answers 400 with that reason. `GET /health` reports whether calling is ready, so the cause is visible before a run is attempted.
 
@@ -157,7 +157,7 @@ Org settings (`data/settings.json`) hold one master prompt per campaign type and
 Guest dials still read the number from storage by guest id. A pipeline test may send `to`, or use the saved `testNumber` in org settings. Test records live in `data/test-calls/`, outside event folders, so guest results and summaries never include them. Tests skip guest guardrails (queue, event timing, calling window, retry cap) but take the same one-call-at-a-time lock as a guest run (D11). A new prompt on a test is stored only on that test record.
 
 **D14. The model decides the close; the server hangs up the phone (2026-09-29).**
-The assembled prompt already says to thank the guest and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, machine detection, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits.
+The assembled prompt already says to say a brief goodbye and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, machine detection, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits. Silence is measured after the guest has spoken. Before that, the settings page chooses how long the guest has to start, defaulting to 3 seconds, and how soon a pickup with no guest speech is hung up, defaulting to 15 seconds. If they do not speak in the opening wait, the voice backend asks the agent to greet.
 
 The voice backend reports one end-call signal. The runner lets the goodbye audio finish, then hangs up. ElevenLabs delivers that signal as `agent_tool_response` for the built-in `end_call` system tool (on by default for a dashboard agent; add it under `built_in_tools` for an agent created by API). A per-call prompt override leaves that tool in place. The tool's own instructions cover a completed task, a mutual close, and the guest asking to stop, in whatever language the call is in. The assembled prompt keeps its one-line reminder so every campaign and pipeline test inherits it. Matching phrases in the transcript was rejected, because the same request shows up in many wordings. A provider socket that closes because the agent ended the call is a normal completion. A cascaded backend later gives its LLM the same tool and reports the same signal.
 
@@ -182,6 +182,11 @@ The organizer can type in a guest who is not on the CSV: a name and a phone numb
 
 **D18. Calling hours are a campaign copy, waived only after two confirmations (2026-09-30).**
 Org settings hold the default window, copied onto each new campaign. The runner enforces that copy. Outside it, a start or a schedule is refused until the organizer confirms twice, and that waiver is stored on the run. `STRICT_CALLING_HOURS` ignores the waiver. A scheduled run is put back on the clock after a restart. A start that passed while the server was down is marked failed.
+
+**D19. The agent stays short and calm, and still states logistics (2026-10-03).**
+Org settings hold one personality: how the agent talks on every call. Tone and length only. The settings page edits it, and a blank value adds nothing. Prompt assembly appends that text. It does not name the event, the guest, or what the call is for. The default asks for short, calm sentences, no excitement, and details only when the guest asks.
+
+Logistics stay a separate line in assembly, because they depend on the campaign type. Before the event, the opening states when it starts, when it ends, and where to attend (the venue, or that it is online), taken from the call context and the brief. The rest of the description stays unused until the guest asks. After the event, those come up only if the guest asks or they still matter to the question. The organizer still owns what the call is for, in the master prompt or the campaign prompt.
 
 ## Data and control flow
 
@@ -225,7 +230,7 @@ The number for a guest call is always read from storage using the guest's id, ne
 - ✓ filtering and ordering;
 - ✓ eligibility rules;
 - ✓ prompt building;
-- prompt building appends the event brief and the callback instruction, and a pipeline test does not produce an open question;
+- prompt building appends the event brief, the short calm speaking rule, and the callback instruction, and a pipeline test does not produce an open question;
 - extraction keeps a question the brief does not answer, and drops one the brief does answer;
 - a follow-up call from an open question is allowed after the retry cap, and resolving the question removes it from the highlight;
 - ✓ atomic storage writes;

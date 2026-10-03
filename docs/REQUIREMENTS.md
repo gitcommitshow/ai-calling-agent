@@ -93,6 +93,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ End the call when the guest asks to stop, after a short goodbye.
 - ✓ End the call when the conversation is finished and neither side has more to add, after a short goodbye.
 - ✓ Keep silence and the maximum call length as safety limits for a call that never reaches either close.
+- ✓ On answer, the agent waits for the guest to speak, then starts the call if they have not. The organizer sets that wait and how soon a pickup with no guest speech ends. The defaults are 3 seconds and 15 seconds.
 - ✓ The organizer can see whether the agent is allowed to hang up, turn that on or off, and set the instructions for when it should. A spoken goodbye hangs up only when that tool is on and the agent uses it.
 - ✓ Record call outcome: answered, no answer, voicemail, declined, hung up, or failed.
 - ✓ Do not leave voicemail messages in phase 1.
@@ -137,7 +138,7 @@ Before a campaign dials guests, the organizer can place one test call through th
 
 - Selling, recruiting, or any call that is not for a specific event the organizer named. Pipeline test calls are in scope: they check this product, and they are not a general dialer.
 - Registering people, selling tickets, or deciding the agenda. We integrate with the event platform; we do not replace it.
-- Prescribing call scripts, tone, or nudge wording in product requirements. The organizer owns that via the campaign prompt. The shared rule in Unanswered questions is the exception: answer only from the event brief, and promise a team callback when a fact is missing.
+- Prescribing call scripts or nudge wording in product requirements. The organizer owns what the call is for via the campaign prompt, and owns how the agent talks via one personality on the settings page. That personality is tone and length only. Two shared rules stay outside it: before the event, state timing and place without being asked; and answer only from the event brief, promising a team callback when a fact is missing.
 - Inbound support, live help during the event, or a multi-day drip of reminder calls. A callback the organizer places from a recorded question is in scope. An inbound call is not.
 - Shipping every event platform or voice vendor in phase 1.
 - Choosing concrete architecture, repo layout, or UI. Those stay open until [DESIGN.md](DESIGN.md).

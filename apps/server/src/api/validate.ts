@@ -5,6 +5,7 @@
 import { badRequest } from './http.ts';
 import { MAX_GUEST_ATTEMPTS } from '../runner/retry-cap.ts';
 import {
+  AGENT_PERSONALITY_MAX,
   CONTEXT_FIELD_IDS,
   EXTRACTION_MODEL_PATTERN,
   EXTRACTION_PROVIDER_PATTERN,
@@ -312,6 +313,19 @@ function parsePositiveSeconds(value: unknown, what: string, min: number, max: nu
   return value;
 }
 
+/** The agent must be able to speak before a silent pickup is hung up. */
+function parseOpeningLimits(
+  opening: unknown,
+  noResponse: unknown,
+): { openingWaitSeconds: number; noResponseSeconds: number } {
+  const openingWaitSeconds = parsePositiveSeconds(opening, 'openingWaitSeconds', 1, 30);
+  const noResponseSeconds = parsePositiveSeconds(noResponse, 'noResponseSeconds', 5, 120);
+  if (openingWaitSeconds >= noResponseSeconds) {
+    throw badRequest('openingWaitSeconds must be shorter than noResponseSeconds');
+  }
+  return { openingWaitSeconds, noResponseSeconds };
+}
+
 function parseBackendOrder(value: unknown): VoiceBackend[] {
   const rows = requireArray(value, 'voiceBackendOrder', 5);
   if (rows.length === 0) throw badRequest('voiceBackendOrder cannot be empty');
@@ -329,6 +343,14 @@ function parseQueue(value: unknown): string[] {
   const queue = rows.map((row, index) => requireString(row, `queue[${index}]`, 120));
   if (new Set(queue).size !== queue.length) throw badRequest('queue cannot repeat a guest');
   return queue;
+}
+
+/** Tone and length. Blank is allowed and adds no extra style. */
+function parseAgentPersonality(value: unknown): string {
+  if (value === undefined || value === null) throw badRequest('agentPersonality is required');
+  if (typeof value !== 'string') throw badRequest('agentPersonality must be a string');
+  if (value.length > AGENT_PERSONALITY_MAX) throw badRequest('agentPersonality is too long');
+  return value.trim();
 }
 
 /** Empty when the campaign uses the agent prompt with nothing added. */
@@ -415,6 +437,7 @@ export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updated
   }
 
   return {
+    agentPersonality: parseAgentPersonality(record.agentPersonality),
     masterPrompts: {
       'pre-event': requireString(prompts['pre-event'], 'masterPrompts.pre-event', 20000),
       'post-event': requireString(prompts['post-event'], 'masterPrompts.post-event', 20000),
@@ -433,6 +456,7 @@ export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updated
       10,
       180,
     ),
+    ...parseOpeningLimits(record.openingWaitSeconds, record.noResponseSeconds),
     extraction: parseExtraction(record.extraction),
     voiceProvider: requireOneOf(record.voiceProvider, VOICE_PROVIDER_IDS, 'voiceProvider'),
     telephonyProvider: requireOneOf(

@@ -60,6 +60,7 @@ function campaign(overrides: Partial<Campaign> = {}): Campaign {
 
 function settings(overrides: Partial<OrgSettings> = {}): OrgSettings {
   return {
+    agentPersonality: 'Stay calm. No excitement.',
     masterPrompts: {
       'pre-event': 'Master: welcome {{guest.firstName}} to {{event.name}}.',
       'post-event': 'Master post.',
@@ -77,6 +78,8 @@ function settings(overrides: Partial<OrgSettings> = {}): OrgSettings {
     silenceSeconds: 20,
     maxCallSeconds: 240,
     dialTimeoutSeconds: 45,
+    openingWaitSeconds: 3,
+    noResponseSeconds: 15,
     extraction: { provider: 'openrouter', model: 'openrouter/free' },
     voiceProvider: 'elevenlabs',
     telephonyProvider: 'plivo',
@@ -96,7 +99,10 @@ describe('assemblePrompt', () => {
       .and.to.include('The studio on Hill Road.')
       .and.to.include('Doors open at 6.')
       .and.to.include('follow these notes')
-      .and.to.include('someone will call them back');
+      .and.to.include('someone will call them back')
+      .and.to.include('How you speak on every call:')
+      .and.to.include('Stay calm. No excitement.')
+      .and.to.include('where to attend');
   });
 
   it('withholds gated-off fields from context and leaves their placeholders intact', () => {

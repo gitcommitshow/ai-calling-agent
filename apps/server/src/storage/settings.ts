@@ -1,5 +1,5 @@
 /**
- * Org-wide settings: master prompts, context allowlist, dialing defaults, and
+ * Org-wide settings: agent personality, master prompts, context allowlist, dialing defaults, and
  * which models and providers a call uses. Runtime call limits and the provider
  * choice apply to every live call. Stored once for the deployment, not per
  * event. Provider credentials are never stored here.
@@ -74,7 +74,23 @@ export const CONTEXT_FIELD_IDS = [
 
 export type ContextFieldId = (typeof CONTEXT_FIELD_IDS)[number];
 
+/** How the agent talks. Longer than a sentence, shorter than a campaign prompt. */
+export const AGENT_PERSONALITY_MAX = 4000;
+
+/**
+ * Style only. No event, guest, or call purpose. Prompt assembly appends this
+ * on every call; the master prompts still say what that call is for.
+ */
+export const DEFAULT_AGENT_PERSONALITY = `Speak in short, plain sentences. Stay calm and matter-of-fact. No excitement, praise, or filler.
+One or two sentences, then wait.
+Give a detail only when they ask, and answer only what they asked.`;
+
 export interface OrgSettings {
+  /**
+   * How the agent talks on every call. Tone and length only. Event facts stay
+   * in the master prompts and the event brief. Blank adds nothing.
+   */
+  agentPersonality: string;
   /** Shared prompt body per campaign type. Campaigns may opt into a custom one. */
   masterPrompts: Record<CampaignType, string>;
   /**
@@ -100,6 +116,16 @@ export interface OrgSettings {
   maxCallSeconds: number;
   /** How long to wait for answer before giving up. Applies to every dial. */
   dialTimeoutSeconds: number;
+  /**
+   * How long a silent guest has, from answer, before the agent starts talking.
+   * Applies to every live call; campaigns cannot override it.
+   */
+  openingWaitSeconds: number;
+  /**
+   * How long a guest who never speaks may stay on the line before hangup.
+   * Applies to every live call; campaigns cannot override it.
+   */
+  noResponseSeconds: number;
   /** Model that reads the transcript after an answered call. */
   extraction: ExtractionChoice;
   /** Voice backend for the next answered call. */
@@ -112,16 +138,16 @@ export interface OrgSettings {
 /** Defaults: current template wording, and every non-phone field allowed. */
 export function defaultOrgSettings(now = new Date().toISOString()): OrgSettings {
   return {
+    agentPersonality: DEFAULT_AGENT_PERSONALITY,
     masterPrompts: {
       'pre-event': `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}.
 
-Introduce yourself in one sentence and say it starts on {{event.startsAt}}. Share the facts from the event brief when they help.
-Ask once whether they plan to attend. If they ask a question, answer it from that brief.
-Keep the call under two minutes and stay polite if they want to end it.`,
+Say who you are, that it starts on {{event.startsAt}}, and where it is. Then ask once whether they plan to attend.
+If they ask a question, answer only that, from the event brief.`,
       'post-event': `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}, which ended on {{event.endsAt}}.
 
-Thank them, confirm whether they made it, and ask for one piece of feedback. If they ask about the event, answer from the event brief.
-Keep the call under two minutes and stay polite if they want to end it.`,
+Confirm whether they made it, and ask for one piece of feedback.
+If they ask about the event, answer only that, from the event brief.`,
     },
     // Phone stays off by default: it is already known to telephony and is easy
     // to leak into transcripts if the model repeats it.
@@ -132,6 +158,8 @@ Keep the call under two minutes and stay polite if they want to end it.`,
     silenceSeconds: 20,
     maxCallSeconds: 240,
     dialTimeoutSeconds: 45,
+    openingWaitSeconds: 3,
+    noResponseSeconds: 15,
     extraction: { provider: 'openrouter', model: 'openrouter/free' },
     voiceProvider: 'elevenlabs',
     telephonyProvider: 'plivo',
@@ -159,6 +187,15 @@ export function normalizeExtraction(value: unknown, fallback: ExtractionChoice):
     return { ...fallback };
   }
   return { provider, model };
+}
+
+/**
+ * Keep a stored personality, including a blank one. A missing or non-string
+ * value falls back to the seed so an older settings file still has a style.
+ */
+export function normalizeAgentPersonality(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') return fallback;
+  return value.trim().slice(0, AGENT_PERSONALITY_MAX);
 }
 
 /** Keep a stored voice provider, or the seed when the file has none. */

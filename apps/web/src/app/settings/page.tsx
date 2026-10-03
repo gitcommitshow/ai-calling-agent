@@ -1,5 +1,5 @@
 /**
- * Org settings: master prompts, dialing defaults, live call limits, the agent
+ * Org settings: agent personality, master prompts, dialing defaults, live call limits, the agent
  * hangup tool, models and providers, and which fields may reach the caller.
  */
 import Link from 'next/link';
@@ -35,8 +35,9 @@ export default async function SettingsPage() {
           </p>
           <h1>Settings</h1>
           <p className="muted small">
-            Shared across every event: prompts, default calling hours, live call limits, whether
-            the agent can hang up, models and providers, and the fixed test number. Calling hours are{' '}
+            Shared across every event: how the agent talks, prompts, default calling hours, live
+            call limits, whether the agent can hang up, models and providers, and the fixed test
+            number. Calling hours are{' '}
             {callingHoursMode === 'strict' ? 'strict' : 'soft'} on this server. Last saved{' '}
             {new Date(settings.updatedAt).toLocaleString('en-IN')}.
           </p>

@@ -57,6 +57,7 @@ describe('provider settings', () => {
       });
 
       const loaded = await store.getSettings();
+      expect(loaded.agentPersonality).to.equal(defaultOrgSettings().agentPersonality);
       expect(loaded.extraction).to.deep.equal({ provider: 'openai', model: 'gpt-4o-mini' });
       expect(loaded.voiceProvider).to.equal('fake');
       expect(loaded.telephonyProvider).to.equal('fake');

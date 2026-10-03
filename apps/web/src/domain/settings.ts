@@ -71,6 +71,8 @@ export interface ProviderAvailability {
   telephony: Record<TelephonyProviderId, boolean>;
 }
 
+/** How the agent talks. Matches the server limit. */
+export const AGENT_PERSONALITY_MAX = 4000;
 /** Custom hangup instructions. Matches the server limit. */
 export const HANGUP_DESCRIPTION_MAX = 4000;
 /** Used when the instruction field is blank. Matches the server constant. */
@@ -89,6 +91,11 @@ export interface VoiceHangupStatus {
 }
 
 export interface OrgSettings {
+  /**
+   * How the agent talks on every call. Tone and length only. Event facts stay
+   * in the master prompts and the event brief. Blank adds nothing.
+   */
+  agentPersonality: string;
   masterPrompts: Record<CampaignType, string>;
   contextFields: ContextFieldId[];
   /** Fixed number one-click pipeline tests dial. Null until set. */
@@ -106,6 +113,10 @@ export interface OrgSettings {
   maxCallSeconds: number;
   /** Ring timeout before a dial is abandoned. Campaigns cannot override this. */
   dialTimeoutSeconds: number;
+  /** How long a silent guest has before the agent starts. Campaigns cannot override this. */
+  openingWaitSeconds: number;
+  /** How long a guest who never speaks may stay on the line. Campaigns cannot override this. */
+  noResponseSeconds: number;
   /** Model that reads the transcript after an answered call. */
   extraction: ExtractionChoice;
   /** Voice backend for the next answered call. */

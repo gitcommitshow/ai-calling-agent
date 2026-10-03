@@ -36,14 +36,13 @@ const DEFAULT_BACKEND_ORDER: VoiceBackend[] = ['elevenlabs', 'cascaded'];
 
 const PRE_EVENT_PROMPT = `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}.
 
-Introduce yourself in one sentence and say it starts on {{event.startsAt}}. Share the facts from the event brief when they help.
-Ask once whether they plan to attend. If they ask a question, answer it from that brief.
-Keep the call under two minutes and stay polite if they want to end it.`;
+Say who you are, that it starts on {{event.startsAt}}, and where it is. Then ask once whether they plan to attend.
+If they ask a question, answer only that, from the event brief.`;
 
 const POST_EVENT_PROMPT = `You are calling {{guest.firstName}} on behalf of the organizer of {{event.name}}, which ended on {{event.endsAt}}.
 
-Thank them, confirm whether they made it, and ask for one piece of feedback. If they ask about the event, answer from the event brief.
-Keep the call under two minutes and stay polite if they want to end it.`;
+Confirm whether they made it, and ask for one piece of feedback.
+If they ask about the event, answer only that, from the event brief.`;
 
 /** Defaults new campaigns copy from org settings, with a safe fallback. */
 export function templateDefaultsFromSettings(

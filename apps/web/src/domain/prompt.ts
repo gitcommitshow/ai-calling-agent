@@ -8,7 +8,7 @@
  * returned, so a change here belongs in both.
  */
 import type { OrgSettings, ContextFieldId } from './settings';
-import type { Campaign, CaptureField, Event, EventBrief, Guest } from './types';
+import type { Campaign, CampaignType, CaptureField, Event, EventBrief, Guest } from './types';
 
 export interface PromptContext {
   event: Event;
@@ -142,6 +142,24 @@ function buildContextLines(ctx: PromptContext): string[] {
   return lines;
 }
 
+/**
+ * Style from org settings. Blank adds nothing. This text is how the agent
+ * talks, not what the event is.
+ */
+function personalitySection(personality: string): string | null {
+  const text = personality.trim();
+  if (!text) return null;
+  return ['How you speak on every call:', text].join('\n');
+}
+
+/** Time and place for this campaign type. Separate from the personality. */
+function logisticsLine(type: CampaignType): string {
+  if (type === 'pre-event') {
+    return 'Before the event, say the logistics in the opening even if they do not ask: when it starts, when it ends, and where to attend (the venue, or that it is online). Take those from the call context and the event brief. Leave out the rest of the description.';
+  }
+  return 'After the event, mention the time or the place only if they ask, or if it still matters to what they asked.';
+}
+
 /** The only line a custom campaign adds. The agent prompt itself is unchanged. */
 function purposeLine(purpose: string | undefined, ctx: PromptContext): string | null {
   const text = purpose?.trim();
@@ -163,7 +181,11 @@ export function assemblePrompt(ctx: PromptContext): string {
 
   const briefLines = describeBrief(ctx.event.brief);
   if (briefLines.length > 0) {
-    sections.push(['What you may say:', ...briefLines].join('\n'));
+    sections.push(
+      ['Event brief. Use this to answer. Do not read it aloud:', ...briefLines].join(
+        '\n',
+      ),
+    );
   }
 
   const notes = describeNotes(ctx.event.brief);
@@ -185,13 +207,17 @@ export function assemblePrompt(ctx: PromptContext): string {
     );
   }
 
+  const personality = personalitySection(settings.agentPersonality);
+  if (personality) sections.push(personality);
+
   const sources = notes
     ? 'Answer the guest only from the event brief, the latest notes, and the call context. When the notes disagree with the description or the call context, follow the notes.'
     : 'Answer the guest only from the event brief and the call context.';
   sections.push(
     [
+      logisticsLine(campaign.type),
       `${sources} If they ask for something that is not there, say once that the team will check and someone will call them back. Do not invent the missing fact.`,
-      'When the guest asks to end the call, or when neither of you has more to add, thank them and end the call.',
+      'When the guest asks to end the call, or when neither of you has more to add, say a brief goodbye and end the call.',
     ].join('\n'),
   );
 
