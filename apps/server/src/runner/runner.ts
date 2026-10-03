@@ -1073,6 +1073,7 @@ export class CallRunner {
         break;
 
       case 'machine_detected':
+        this.log(`attempt ${live.attemptId} machine detected, hanging up before the voice backend`);
         this.advance(live, 'machine_detected', 'no message was left');
         void this.deps.telephony.hangup(live.attemptId);
         live.settle({
@@ -1084,12 +1085,16 @@ export class CallRunner {
         break;
 
       case 'answered':
+        this.log(`attempt ${live.attemptId} audio stream answered, starting voice`);
         live.answered = true;
         this.advance(live, 'answered', null, { status: 'in_call' });
         void this.startVoice(live, event.channel);
         break;
 
       case 'ended':
+        this.log(
+          `attempt ${live.attemptId} telephony ended reason=${event.reason} detail=${event.detail ?? 'none'}`,
+        );
         live.settle({
           reason: event.reason,
           detail: event.detail ?? null,
@@ -1122,6 +1127,9 @@ export class CallRunner {
   /** Bridge the answered call to the voice backend and arm the call guardrails. */
   private async startVoice(live: LiveCall, channel: AudioChannel): Promise<void> {
     const limits = await this.resolveLimits();
+    this.log(
+      `attempt ${live.attemptId} limits opening=${limits.openingWaitSeconds}s no-response=${limits.noResponseSeconds}s silence=${limits.silenceSeconds}s max=${limits.maxCallSeconds}s`,
+    );
     const answeredAt = Date.now();
     let lastGuestTurnAt = answeredAt;
     // After the guest has spoken, a full quiet period ends the call. The
@@ -1133,6 +1141,7 @@ export class CallRunner {
           live.timers.push(armSilence());
           return;
         }
+        this.log(`attempt ${live.attemptId} silence timer firing`);
         void this.deps.telephony.hangup(live.attemptId);
         live.settle({
           reason: 'completed',
@@ -1154,6 +1163,9 @@ export class CallRunner {
         })) {
           return;
         }
+        this.log(
+          `attempt ${live.attemptId} no-response timer firing after ${limits.noResponseSeconds}s guestSpoke=${live.guestSpoke}`,
+        );
         void this.deps.telephony.hangup(live.attemptId);
         live.settle({
           reason: 'completed',
@@ -1169,6 +1181,7 @@ export class CallRunner {
       prompt = await live.buildPrompt();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.log(`attempt ${live.attemptId} prompt failed: ${message}`);
       void this.deps.telephony.hangup(live.attemptId);
       live.settle({
         reason: 'failed',
@@ -1179,6 +1192,7 @@ export class CallRunner {
       return;
     }
 
+    this.log(`attempt ${live.attemptId} opening the voice backend`);
     try {
       const session = await this.deps.voice.start({
         attemptId: live.attemptId,
@@ -1192,7 +1206,10 @@ export class CallRunner {
             const firstGuestTurn = !live.guestSpoke;
             live.guestSpoke = true;
             lastGuestTurnAt = Date.now();
-            if (firstGuestTurn) live.timers.push(armSilence());
+            if (firstGuestTurn) {
+              this.log(`attempt ${live.attemptId} first guest transcript, silence timer armed`);
+              live.timers.push(armSilence());
+            }
           }
           live.snapshot = {
             ...live.snapshot,
@@ -1202,6 +1219,7 @@ export class CallRunner {
         },
         onAgentEnd: (detail: string) => {
           if (live.settled) return;
+          this.log(`attempt ${live.attemptId} agent ended: ${detail}`);
           // Settle before hangup so a synchronous ended event keeps this reason.
           live.settle({
             reason: 'completed',
@@ -1213,6 +1231,7 @@ export class CallRunner {
         },
         onError: (error: Error) => {
           if (live.settled) return;
+          this.log(`attempt ${live.attemptId} voice error: ${error.message}`);
           void this.deps.telephony.hangup(live.attemptId);
           live.settle({
             reason: 'failed',
@@ -1224,10 +1243,12 @@ export class CallRunner {
       });
 
       if (live.settled) {
+        this.log(`attempt ${live.attemptId} voice session opened after the call had already ended`);
         await session.close().catch(() => undefined);
         return;
       }
 
+      this.log(`attempt ${live.attemptId} voice session ready id=${session.sessionId ?? 'pending'}`);
       live.session = session;
       this.advance(live, 'backend_started', this.deps.voice.backend, {
         voiceBackend: this.deps.voice.backend,
@@ -1237,6 +1258,7 @@ export class CallRunner {
       live.timers.push(
         setTimeout(() => {
           if (live.settled) return;
+          this.log(`attempt ${live.attemptId} maximum length timer firing`);
           void this.deps.telephony.hangup(live.attemptId);
           live.settle({
             reason: 'completed',
@@ -1248,6 +1270,7 @@ export class CallRunner {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      this.log(`attempt ${live.attemptId} voice backend would not start: ${message}`);
       void this.deps.telephony.hangup(live.attemptId);
       live.settle({
         reason: 'failed',

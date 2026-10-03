@@ -41,6 +41,14 @@ interface Session {
   audioListeners: ((frame: Buffer) => void)[];
   answered: boolean;
   terminal: boolean;
+  /** When dial was accepted, so a later line can show milliseconds since then. */
+  dialedAt: number;
+  loggedMedia: boolean;
+}
+
+/** One line on the live-call path. No phone numbers and no callback body. */
+function traceCall(attemptId: string, sinceMs: number, message: string): void {
+  console.log(`[plivo] ${attemptId} +${sinceMs}ms ${message}`);
 }
 
 function formBody(body: string): Record<string, string> {
@@ -80,10 +88,15 @@ function escapeXml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** Machine flag as Plivo sent it, or none when the callback omitted it. */
+function machineField(fields: Record<string, string>): string {
+  const raw = fields.Machine ?? fields.MachineDetection ?? fields.machine_detection ?? '';
+  return raw.trim().toLowerCase() || 'none';
+}
+
 /** Truthy machine-detection flag, whichever spelling the callback used. */
 function machineDetected(fields: Record<string, string>): boolean {
-  const raw = fields.Machine ?? fields.MachineDetection ?? fields.machine_detection ?? '';
-  return raw.toLowerCase() === 'true';
+  return machineField(fields) === 'true';
 }
 
 export class PlivoTelephony implements TelephonyPort {
@@ -124,7 +137,10 @@ export class PlivoTelephony implements TelephonyPort {
       audioListeners: [],
       answered: false,
       terminal: false,
+      dialedAt: Date.now(),
+      loggedMedia: false,
     };
+    traceCall(request.attemptId, 0, 'dial accepted, machine detection 5000ms, answer waits for it');
     this.sessions.set(request.attemptId, session);
 
     const auth = Buffer.from(`${this.config.authId}:${this.config.authToken}`).toString('base64');
@@ -169,12 +185,15 @@ export class PlivoTelephony implements TelephonyPort {
 
     const socket = session.socket;
     session.socket = null;
+    const since = Date.now() - session.dialedAt;
     if (socket) {
+      traceCall(session.attemptId, since, 'hangup requested, closing the audio stream');
       // Stream is up. Closing it runs the <Hangup/> after <Stream>. A DELETE
       // here 404s because Plivo has already torn the call down.
       socket.close();
       return;
     }
+    traceCall(session.attemptId, since, 'hangup requested, no audio stream, deleting the call');
 
     if (!session.providerCallId) return;
 
@@ -240,21 +259,29 @@ export class PlivoTelephony implements TelephonyPort {
     }
 
     if (kind === 'ring') {
-      if (session && !session.terminal) this.emit({ attemptId, kind: 'ringing' });
+      if (session && !session.terminal) {
+        traceCall(attemptId, Date.now() - session.dialedAt, 'ringing');
+        this.emit({ attemptId, kind: 'ringing' });
+      }
       res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
       return;
     }
 
     if (kind === 'answer') {
+      const since = session ? Date.now() - session.dialedAt : 0;
+      const machine = machineField(fields);
       if (!session || session.terminal) {
+        traceCall(attemptId, since, `answer ignored, session missing or already ended, machine=${machine}`);
         res.writeHead(200, { 'content-type': 'text/xml' }).end('<Response><Hangup/></Response>');
         return;
       }
       if (machineDetected(fields)) {
+        traceCall(attemptId, since, `answer machine=${machine}, hanging up before the audio stream`);
         this.emit({ attemptId, kind: 'machine_detected' });
         res.writeHead(200, { 'content-type': 'text/xml' }).end('<Response><Hangup/></Response>');
         return;
       }
+      traceCall(attemptId, since, `answer machine=${machine}, opening the audio stream`);
       res.writeHead(200, { 'content-type': 'text/xml' }).end(this.answerXml(attemptId));
       return;
     }
@@ -288,6 +315,12 @@ export class PlivoTelephony implements TelephonyPort {
     const status = (fields.CallStatus ?? '').toLowerCase();
     const reason = END_REASONS[status] ?? (session.answered ? 'completed' : 'failed');
     const detail = fields.HangupCauseName ?? fields.HangupCause ?? status;
+    const source = fields.HangupSource ?? '';
+    traceCall(
+      attemptId,
+      Date.now() - session.dialedAt,
+      `hangup callback status=${status || 'none'} cause=${detail || 'none'} source=${source || 'none'} answered=${session.answered} mapped=${reason}`,
+    );
 
     session.socket?.close();
     session.socket = null;
@@ -310,6 +343,11 @@ export class PlivoTelephony implements TelephonyPort {
       session.socket = ws;
       ws.on('message', (raw) => this.onStreamMessage(session, raw.toString()));
       ws.on('close', () => {
+        traceCall(
+          attemptId,
+          Date.now() - session.dialedAt,
+          `audio stream closed answered=${session.answered}`,
+        );
         if (session.socket === ws) session.socket = null;
       });
       ws.on('error', () => ws.close());
@@ -327,6 +365,7 @@ export class PlivoTelephony implements TelephonyPort {
 
     if (message.event === 'start') {
       session.streamId = message.start?.streamId ?? null;
+      traceCall(session.attemptId, Date.now() - session.dialedAt, 'audio stream started');
       if (session.answered) return;
       session.answered = true;
       this.emit({
@@ -338,6 +377,10 @@ export class PlivoTelephony implements TelephonyPort {
     }
 
     if (message.event === 'media' && message.media?.payload) {
+      if (!session.loggedMedia) {
+        session.loggedMedia = true;
+        traceCall(session.attemptId, Date.now() - session.dialedAt, 'first guest audio frame');
+      }
       const frame = Buffer.from(message.media.payload, 'base64');
       for (const listener of session.audioListeners) listener(frame);
     }

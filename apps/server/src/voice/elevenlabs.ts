@@ -18,6 +18,11 @@ import {
 } from './types.ts';
 
 const API = 'https://api.elevenlabs.io/v1';
+
+/** One line on the voice path. No prompt text, no signed URL, no API key. */
+function traceVoice(attemptId: string, message: string): void {
+  console.log(`[voice] ${attemptId} ${message}`);
+}
 const LANGUAGE_NAMES: Record<string, string> = { en: 'English', hi: 'Hindi' };
 /** Telephony audio is 8 kHz mu-law: one byte is one sample. */
 const MULAW_HZ = 8000;
@@ -180,15 +185,19 @@ export class ElevenLabsBackend implements VoiceBackendPort {
    * Clear a dashboard greeting and set the provider's opening wait to the saved
    * number of seconds. After that silence, the provider starts the agent.
    */
-  private async prepareOpening(openingWaitSeconds: number): Promise<void> {
+  private async prepareOpening(attemptId: string, openingWaitSeconds: number): Promise<void> {
     const url = `${API}/convai/agents/${encodeURIComponent(this.config.agentId)}`;
     const headers = {
       'xi-api-key': this.config.apiKey,
       'content-type': 'application/json',
     };
+    traceVoice(attemptId, `opening patch ${openingWaitSeconds}s`);
     try {
       const response = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
-      if (!response.ok) return;
+      if (!response.ok) {
+        traceVoice(attemptId, `opening patch read failed ${response.status}`);
+        return;
+      }
       const agent = (await response.json()) as unknown;
       const patch = await fetch(url, {
         method: 'PATCH',
@@ -197,8 +206,10 @@ export class ElevenLabsBackend implements VoiceBackendPort {
         signal: AbortSignal.timeout(8_000),
       });
       await patch.arrayBuffer();
-    } catch {
-      return;
+      traceVoice(attemptId, `opening patch ${patch.ok ? 'saved' : `write failed ${patch.status}`}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      traceVoice(attemptId, `opening patch error ${message.slice(0, 160)}`);
     }
   }
 
@@ -219,8 +230,10 @@ export class ElevenLabsBackend implements VoiceBackendPort {
   }
 
   async start(ctx: VoiceSessionContext): Promise<VoiceSession> {
-    await this.prepareOpening(Math.max(1, Math.round(ctx.openingWaitMs / 1000)));
+    await this.prepareOpening(ctx.attemptId, Math.max(1, Math.round(ctx.openingWaitMs / 1000)));
+    traceVoice(ctx.attemptId, 'requesting signed url');
     const signed = await this.signedUrl();
+    traceVoice(ctx.attemptId, 'signed url ready, connecting');
     const socket = new WebSocket(signed);
 
     let conversationId: string | null = null;
@@ -228,6 +241,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
     let inputFormat = parseElevenLabsAudioFormat(undefined);
     let outputFormat = parseElevenLabsAudioFormat(undefined);
     let formatsReady = false;
+    let heardAgent = false;
     const queuedGuest: Buffer[] = [];
     const drain = new GoodbyeDrain(() => Date.now(), GOODBYE_PAD_MS);
     const signal = createEndCallSignal();
@@ -252,7 +266,10 @@ export class ElevenLabsBackend implements VoiceBackendPort {
     };
 
     await new Promise<void>((resolve, reject) => {
-      socket.once('open', resolve);
+      socket.once('open', () => {
+        traceVoice(ctx.attemptId, 'socket open');
+        resolve();
+      });
       socket.once('error', (error: Error) => reject(error));
     });
 
@@ -291,6 +308,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
         case 'conversation_initiation_metadata': {
           const meta = message.conversation_initiation_metadata_event;
           conversationId = meta?.conversation_id ?? null;
+          traceVoice(ctx.attemptId, `conversation ${conversationId ?? 'none'}`);
           inputFormat = parseElevenLabsAudioFormat(meta?.user_input_audio_format);
           outputFormat = parseElevenLabsAudioFormat(meta?.agent_output_audio_format);
           formatsReady = true;
@@ -301,6 +319,10 @@ export class ElevenLabsBackend implements VoiceBackendPort {
         case 'audio': {
           const payload = message.audio_event?.audio_base_64;
           if (payload) {
+            if (!heardAgent) {
+              heardAgent = true;
+              traceVoice(ctx.attemptId, 'first agent audio');
+            }
             const frame = fromElevenLabs(Buffer.from(payload, 'base64'), outputFormat);
             ctx.channel.send(frame);
             drain.noteFrame(frame.length);
@@ -335,15 +357,21 @@ export class ElevenLabsBackend implements VoiceBackendPort {
           break;
       }
 
-      if (noteEndCall(signal, message)) scheduleEnd();
+      if (noteEndCall(signal, message)) {
+        traceVoice(ctx.attemptId, `end_call accepted: ${signal.reason}`);
+        scheduleEnd();
+      }
     });
 
     socket.on('error', (error: Error) => {
+      traceVoice(ctx.attemptId, `socket error ${error.message.slice(0, 160)}`);
       if (closed || signal.ended) return;
       ctx.onError(error);
     });
 
     socket.on('close', (code: number, reason: Buffer) => {
+      const detail = reason.toString() || 'no reason';
+      traceVoice(ctx.attemptId, `socket closed ${code} ${detail.slice(0, 160)} ended=${signal.ended}`);
       if (closed) return;
       // After end_call the provider often closes the socket itself. That is a
       // normal completion; the drain timer still hangs the phone up.
