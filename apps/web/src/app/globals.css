@@ -735,6 +735,37 @@ th {
   margin-left: 0;
 }
 
+.queue-transcripts {
+  flex: 1 1 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.call-transcript summary .call-transcript-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: calc(100% - 1.25rem);
+  min-width: 0;
+  vertical-align: bottom;
+}
+
+.call-transcript summary time {
+  flex: 0 0 auto;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-transcript summary .last-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  color: var(--text);
+}
+
 .retry-cap {
   display: flex;
   flex-wrap: wrap;

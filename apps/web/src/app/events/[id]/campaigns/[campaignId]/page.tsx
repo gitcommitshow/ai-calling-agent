@@ -4,6 +4,7 @@
  */
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { CallTranscript } from '../../../../../components/CallTranscript';
 import { CampaignForm } from '../../../../../components/CampaignForm';
 import { GuestRetryCap } from '../../../../../components/GuestRetryCap';
 import { Icon } from '../../../../../components/Icon';
@@ -110,22 +111,42 @@ export default async function CampaignPage({
             </p>
           ) : (
             <ol className="queue-list">
-              {queued.map((guest, index) => (
-                <li key={guest.id} className="queue-person">
-                  <span className="position-badge">{index + 1}</span>
-                  <span className="truncate">{guest.name}</span>
-                  <GuestRetryCap
-                    campaignId={campaign.id}
-                    guestId={guest.id}
-                    guestName={guest.name}
-                    campaignDefault={campaign.retryCap}
-                    override={campaign.retryCapOverrides?.[guest.id]}
-                    attempts={attemptsByGuest[guest.id] ?? 0}
-                    latest={latestByGuest[guest.id] ?? null}
-                  />
-                  <span className="phone small muted">{formatIndianPhone(guest.phone)}</span>
-                </li>
-              ))}
+              {queued.map((guest, index) => {
+                const calls = attempts.filter(
+                  (attempt) =>
+                    attempt.campaignId === campaign.id &&
+                    attempt.guestId === guest.id &&
+                    attempt.transcript.length > 0,
+                );
+                return (
+                  <li key={guest.id} className="queue-person">
+                    <span className="position-badge">{index + 1}</span>
+                    <span className="truncate">{guest.name}</span>
+                    <GuestRetryCap
+                      campaignId={campaign.id}
+                      guestId={guest.id}
+                      guestName={guest.name}
+                      campaignDefault={campaign.retryCap}
+                      override={campaign.retryCapOverrides?.[guest.id]}
+                      attempts={attemptsByGuest[guest.id] ?? 0}
+                      latest={latestByGuest[guest.id] ?? null}
+                    />
+                    <span className="phone small muted">{formatIndianPhone(guest.phone)}</span>
+                    {calls.length > 0 ? (
+                      <div className="queue-transcripts">
+                        {calls.map((attempt) => (
+                          <CallTranscript
+                            key={attempt.id}
+                            transcript={attempt.transcript}
+                            startedAt={attempt.startedAt}
+                            timezone={event.timezone}
+                          />
+                        ))}
+                      </div>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ol>
           )}
         </section>
