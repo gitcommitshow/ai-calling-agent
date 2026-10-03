@@ -1,8 +1,8 @@
 'use client';
 
 /**
- * Org settings editor: master prompts, context allowlist, dialing defaults for
- * new campaigns, and runtime call limits that every live call must honor.
+ * Org settings editor: master prompts, context allowlist, dialing defaults,
+ * runtime call limits, and the models and providers every live call uses.
  */
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
@@ -11,9 +11,15 @@ import { SettingHint } from './SettingHint';
 import {
   CONTEXT_FIELD_IDS,
   CONTEXT_FIELD_META,
+  EXTRACTION_PROVIDERS,
+  TELEPHONY_PROVIDERS,
+  VOICE_PROVIDERS,
   type CallingHoursMode,
   type ContextFieldId,
   type OrgSettings,
+  type ProviderAvailability,
+  type TelephonyProviderId,
+  type VoiceProviderId,
 } from '../domain/settings';
 import type { CampaignType } from '../domain/types';
 import { normalizeIndianPhone } from '../domain/phone';
@@ -23,9 +29,16 @@ interface Props {
   initial: OrgSettings;
   /** Read from the server environment. The organizer cannot change it here. */
   callingHoursMode: CallingHoursMode;
+  /** Which providers already have a key. Null when the server did not report it. */
+  providerAvailability: ProviderAvailability | null;
 }
 
-export function SettingsForm({ initial, callingHoursMode }: Props) {
+/** Suggested model for a provider, used when the current model is still a default. */
+function suggestedModel(provider: string): string | null {
+  return EXTRACTION_PROVIDERS.find((option) => option.id === provider)?.suggestedModel ?? null;
+}
+
+export function SettingsForm({ initial, callingHoursMode, providerAvailability }: Props) {
   const router = useRouter();
   const [preEvent, setPreEvent] = useState(initial.masterPrompts['pre-event']);
   const [postEvent, setPostEvent] = useState(initial.masterPrompts['post-event']);
@@ -36,10 +49,25 @@ export function SettingsForm({ initial, callingHoursMode }: Props) {
   const [silenceSeconds, setSilenceSeconds] = useState(initial.silenceSeconds);
   const [maxCallSeconds, setMaxCallSeconds] = useState(initial.maxCallSeconds);
   const [dialTimeoutSeconds, setDialTimeoutSeconds] = useState(initial.dialTimeoutSeconds);
+  const [telephonyProvider, setTelephonyProvider] = useState<TelephonyProviderId>(
+    initial.telephonyProvider,
+  );
+  const [voiceProvider, setVoiceProvider] = useState<VoiceProviderId>(initial.voiceProvider);
+  const [extractionProvider, setExtractionProvider] = useState(initial.extraction.provider);
+  const [extractionModel, setExtractionModel] = useState(initial.extraction.model);
   const [contextFields, setContextFields] = useState<ContextFieldId[]>(initial.contextFields);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  function changeExtractionProvider(next: string) {
+    const previousSuggestion = suggestedModel(extractionProvider);
+    const nextSuggestion = suggestedModel(next);
+    setExtractionProvider(next);
+    if (nextSuggestion && (extractionModel.trim() === '' || extractionModel === previousSuggestion)) {
+      setExtractionModel(nextSuggestion);
+    }
+  }
 
   function toggleField(id: ContextFieldId) {
     setContextFields((current) =>
@@ -78,11 +106,16 @@ export function SettingsForm({ initial, callingHoursMode }: Props) {
           silenceSeconds,
           maxCallSeconds,
           dialTimeoutSeconds,
+          extraction: { provider: extractionProvider, model: extractionModel.trim() },
+          voiceProvider,
+          telephonyProvider,
         }),
       });
       const payload = (await response.json()) as { error?: string };
       if (!response.ok) throw new Error(payload.error ?? 'could not save settings');
-      setMessage('Settings saved. New campaigns pick up dialing defaults. Live call limits apply on the next dial.');
+      setMessage(
+        'Settings saved. New campaigns pick up dialing defaults. Call limits and the model choices apply on the next dial.',
+      );
       router.refresh();
     } catch (saveError) {
       setError((saveError as Error).message);
@@ -112,6 +145,90 @@ export function SettingsForm({ initial, callingHoursMode }: Props) {
             onChange={(changeEvent) => setTestNumber(changeEvent.target.value)}
           />
         </div>
+      </section>
+
+      <section className="card stack">
+        <div>
+          <h2>Models and providers</h2>
+          <SettingHint detail="API keys stay in the server environment and are never saved here. A choice saved on this page is what the next call uses, even when the environment still names a different model. A call already connected keeps its carrier and voice. The transcript is read with the model saved when the call ends.">
+            Used on the next call. Keys stay on the server.
+          </SettingHint>
+        </div>
+        <div className="grid">
+          <div>
+            <label htmlFor="telephony-provider">Telephony</label>
+            <select
+              id="telephony-provider"
+              value={telephonyProvider}
+              onChange={(changeEvent) =>
+                setTelephonyProvider(changeEvent.target.value as TelephonyProviderId)
+              }
+            >
+              {TELEPHONY_PROVIDERS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="voice-provider">Voice</label>
+            <select
+              id="voice-provider"
+              value={voiceProvider}
+              onChange={(changeEvent) =>
+                setVoiceProvider(changeEvent.target.value as VoiceProviderId)
+              }
+            >
+              {VOICE_PROVIDERS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="extraction-provider">Transcript model provider</label>
+            <select
+              id="extraction-provider"
+              value={extractionProvider}
+              onChange={(changeEvent) => changeExtractionProvider(changeEvent.target.value)}
+            >
+              {extractionOptions(extractionProvider, extractionModel).map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label htmlFor="extraction-model">Transcript model</label>
+            <input
+              id="extraction-model"
+              value={extractionModel}
+              required
+              list="extraction-model-suggestions"
+              spellCheck={false}
+              onChange={(changeEvent) => setExtractionModel(changeEvent.target.value)}
+            />
+            <datalist id="extraction-model-suggestions">
+              {EXTRACTION_PROVIDERS.map((option) => (
+                <option key={option.id} value={option.suggestedModel} />
+              ))}
+            </datalist>
+            <p className="small muted">
+              {suggestedModel(extractionProvider)
+                ? `The id ${extractionProvider} expects, such as ${suggestedModel(extractionProvider)}.`
+                : `The id ${extractionProvider} expects.`}
+            </p>
+          </div>
+        </div>
+        <ProviderNotices
+          telephonyProvider={telephonyProvider}
+          voiceProvider={voiceProvider}
+          extractionProvider={extractionProvider}
+          providerAvailability={providerAvailability}
+        />
       </section>
 
       <section className="card stack">
@@ -309,5 +426,78 @@ export function SettingsForm({ initial, callingHoursMode }: Props) {
         </button>
       </div>
     </form>
+  );
+}
+
+/** Catalog plus the saved provider when it is a custom slug. */
+function extractionOptions(provider: string, model: string) {
+  if (EXTRACTION_PROVIDERS.some((option) => option.id === provider)) return EXTRACTION_PROVIDERS;
+  return [
+    { id: provider, label: provider, suggestedModel: model, keyVariable: 'EXTRACTION_API_KEY' },
+    ...EXTRACTION_PROVIDERS,
+  ];
+}
+
+/**
+ * Warnings for the current choice: a fake provider will not place a real call,
+ * and a real provider with no key on this server will fail the next dial.
+ */
+function ProviderNotices({
+  telephonyProvider,
+  voiceProvider,
+  extractionProvider,
+  providerAvailability,
+}: {
+  telephonyProvider: TelephonyProviderId;
+  voiceProvider: VoiceProviderId;
+  extractionProvider: string;
+  providerAvailability: ProviderAvailability | null;
+}) {
+  const extraction = EXTRACTION_PROVIDERS.find((option) => option.id === extractionProvider);
+  const keyReady = providerAvailability
+    ? providerAvailability.extraction[extractionProvider] === true
+    : null;
+  const keyVariable = extraction?.keyVariable;
+
+  return (
+    <div className="stack">
+      {telephonyProvider === 'fake' ? (
+        <p className="notice">
+          <Icon name="alert" /> Fake telephony does not dial a phone. Use it to try the app on this
+          machine.
+        </p>
+      ) : null}
+      {telephonyProvider === 'plivo' && providerAvailability && !providerAvailability.telephony.plivo ? (
+        <p className="notice error">
+          <Icon name="alert" /> Plivo needs PLIVO_AUTH_ID, PLIVO_AUTH_TOKEN, PLIVO_CALLER_ID, and an
+          https PUBLIC_BASE_URL. Restart the server after setting them.
+        </p>
+      ) : null}
+      {voiceProvider === 'fake' ? (
+        <p className="notice">
+          <Icon name="alert" /> Fake voice does not call ElevenLabs. It speaks a short script on this
+          machine.
+        </p>
+      ) : null}
+      {voiceProvider === 'elevenlabs' &&
+      providerAvailability &&
+      !providerAvailability.voice.elevenlabs ? (
+        <p className="notice error">
+          <Icon name="alert" /> ElevenLabs needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID. Restart
+          the server after setting them.
+        </p>
+      ) : null}
+      {extractionProvider === 'ollama' ? (
+        <p className="small muted">Ollama runs on this machine and does not need an API key.</p>
+      ) : null}
+      {extractionProvider !== 'ollama' && keyReady === false ? (
+        <p className="notice error">
+          <Icon name="alert" />{' '}
+          {keyVariable
+            ? `${extraction?.label ?? extractionProvider} needs ${keyVariable} or EXTRACTION_API_KEY in the server environment. Restart after adding it.`
+            : `${extractionProvider} needs EXTRACTION_API_KEY in the server environment. Restart after adding it.`}
+        </p>
+      ) : null}
+    </div>
   );
 }

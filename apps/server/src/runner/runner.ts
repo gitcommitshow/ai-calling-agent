@@ -165,9 +165,13 @@ export class CallRunner {
 
   constructor(deps: RunnerDeps) {
     this.deps = deps;
-    this.setTimer = deps.timers?.set ?? ((fn, ms) => setTimeout(fn, ms));
-    this.clearTimer =
-      deps.timers?.clear ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+    const timers = deps.timers;
+    // Call set/clear on the timers object. A bare method loses `this`, and the
+    // pending list it pushes onto disappears.
+    this.setTimer = timers ? (fn, ms) => timers.set(fn, ms) : (fn, ms) => setTimeout(fn, ms);
+    this.clearTimer = timers
+      ? (handle) => timers.clear(handle)
+      : (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>);
     deps.telephony.onEvent((event) => this.onTelephonyEvent(event));
   }
 

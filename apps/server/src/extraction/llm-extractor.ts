@@ -1,7 +1,7 @@
 /**
  * Extractor backed by resilient-llm, which gives us retries, rate limiting, and
- * one API across providers. The provider and model come from configuration, so
- * switching from a free OpenRouter model to a paid one is an env change.
+ * one API across providers. The provider and model come from org settings, so
+ * switching from a free OpenRouter model to a paid one is a settings change.
  */
 import { ResilientLLM } from 'resilient-llm';
 import type { ExtractionConfig } from '../config.ts';

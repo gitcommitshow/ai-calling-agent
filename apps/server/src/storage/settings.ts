@@ -1,9 +1,60 @@
 /**
- * Org-wide settings: master prompts, context allowlist, and dialing defaults
- * that new campaigns inherit. Runtime call limits here apply to every live call.
- * Stored once for the deployment, not per event.
+ * Org-wide settings: master prompts, context allowlist, dialing defaults, and
+ * which models and providers a call uses. Runtime call limits and the provider
+ * choice apply to every live call. Stored once for the deployment, not per
+ * event. Provider credentials are never stored here.
  */
 import type { CallingWindow, CampaignType } from './types.ts';
+
+/**
+ * Providers the settings page offers for transcript extraction. A saved custom
+ * slug is still accepted, so a provider registered with resilient-llm is not
+ * rejected just because it is missing from this list.
+ */
+export const EXTRACTION_PROVIDER_IDS = [
+  'openrouter',
+  'openai',
+  'anthropic',
+  'google',
+  'ollama',
+] as const;
+
+export type ExtractionProviderId = (typeof EXTRACTION_PROVIDER_IDS)[number];
+
+/** resilient-llm provider slug: a short lowercase name, not a URL or a key. */
+export const EXTRACTION_PROVIDER_PATTERN = /^[a-z][a-z0-9_-]{0,40}$/;
+
+/** Model id the provider expects, such as openrouter/free or gpt-4o-mini. */
+export const EXTRACTION_MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,120}$/;
+
+export const VOICE_PROVIDER_IDS = ['elevenlabs', 'fake'] as const;
+export type VoiceProviderId = (typeof VOICE_PROVIDER_IDS)[number];
+
+export const TELEPHONY_PROVIDER_IDS = ['plivo', 'fake'] as const;
+export type TelephonyProviderId = (typeof TELEPHONY_PROVIDER_IDS)[number];
+
+/** Which model reads a finished transcript. The API key stays in the environment. */
+export interface ExtractionChoice {
+  provider: string;
+  model: string;
+}
+
+/**
+ * The in-memory copy adapters read on each dial. Org settings are the source
+ * of truth; this object is updated whenever those settings are saved.
+ */
+export interface ProviderSelection {
+  telephonyProvider: TelephonyProviderId;
+  voiceProvider: VoiceProviderId;
+  extraction: ExtractionChoice;
+}
+
+/** Values used when a settings file never saved that field. Usually the environment. */
+export interface SettingsSeeds {
+  extraction?: ExtractionChoice;
+  voiceProvider?: VoiceProviderId;
+  telephonyProvider?: TelephonyProviderId;
+}
 
 /** Every piece of guest or event data that can appear in a call prompt. */
 export const CONTEXT_FIELD_IDS = [
@@ -49,6 +100,12 @@ export interface OrgSettings {
   maxCallSeconds: number;
   /** How long to wait for answer before giving up. Applies to every dial. */
   dialTimeoutSeconds: number;
+  /** Model that reads the transcript after an answered call. */
+  extraction: ExtractionChoice;
+  /** Voice backend for the next answered call. */
+  voiceProvider: VoiceProviderId;
+  /** Carrier for the next dial. */
+  telephonyProvider: TelephonyProviderId;
   updatedAt: string;
 }
 
@@ -75,8 +132,46 @@ Keep the call under two minutes and stay polite if they want to end it.`,
     silenceSeconds: 20,
     maxCallSeconds: 240,
     dialTimeoutSeconds: 45,
+    extraction: { provider: 'openrouter', model: 'openrouter/free' },
+    voiceProvider: 'elevenlabs',
+    telephonyProvider: 'plivo',
     updatedAt: now,
   };
+}
+
+/** Copy a saved settings choice onto the selection the live adapters read. */
+export function adoptProviderSelection(target: ProviderSelection, settings: OrgSettings): void {
+  target.telephonyProvider = settings.telephonyProvider;
+  target.voiceProvider = settings.voiceProvider;
+  target.extraction = {
+    provider: settings.extraction.provider,
+    model: settings.extraction.model,
+  };
+}
+
+/** Keep a stored extraction choice, or the seed when the file has none or a bad one. */
+export function normalizeExtraction(value: unknown, fallback: ExtractionChoice): ExtractionChoice {
+  if (!value || typeof value !== 'object') return { ...fallback };
+  const record = value as { provider?: unknown; model?: unknown };
+  const provider = typeof record.provider === 'string' ? record.provider.trim() : '';
+  const model = typeof record.model === 'string' ? record.model.trim() : '';
+  if (!EXTRACTION_PROVIDER_PATTERN.test(provider) || !EXTRACTION_MODEL_PATTERN.test(model)) {
+    return { ...fallback };
+  }
+  return { provider, model };
+}
+
+/** Keep a stored voice provider, or the seed when the file has none. */
+export function normalizeVoiceProvider(value: unknown, fallback: VoiceProviderId): VoiceProviderId {
+  return value === 'elevenlabs' || value === 'fake' ? value : fallback;
+}
+
+/** Keep a stored telephony provider, or the seed when the file has none. */
+export function normalizeTelephonyProvider(
+  value: unknown,
+  fallback: TelephonyProviderId,
+): TelephonyProviderId {
+  return value === 'plivo' || value === 'fake' ? value : fallback;
 }
 
 export function isContextFieldId(value: string): value is ContextFieldId {

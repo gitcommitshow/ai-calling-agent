@@ -1,6 +1,7 @@
 /**
  * Org settings: master prompts, dialing defaults for new campaigns, live call
- * limits, and which guest/event fields may reach the AI calling infrastructure.
+ * limits, models and providers, and which guest/event fields may reach the
+ * AI calling infrastructure.
  */
 import Link from 'next/link';
 import { SettingsForm } from '../../components/SettingsForm';
@@ -11,7 +12,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
   try {
-    const { settings, callingHoursMode } = await loadSettings();
+    const { settings, callingHoursMode, providerAvailability } = await loadSettings();
     return (
       <div className="stack">
         <div>
@@ -22,13 +23,17 @@ export default async function SettingsPage() {
           </p>
           <h1>Settings</h1>
           <p className="muted small">
-            Shared across every event: prompts, default calling hours, live call limits, and the
-            fixed test number. Calling hours are{' '}
+            Shared across every event: prompts, default calling hours, live call limits, models
+            and providers, and the fixed test number. Calling hours are{' '}
             {callingHoursMode === 'strict' ? 'strict' : 'soft'} on this server. Last saved{' '}
             {new Date(settings.updatedAt).toLocaleString('en-IN')}.
           </p>
         </div>
-        <SettingsForm initial={settings} callingHoursMode={callingHoursMode} />
+        <SettingsForm
+          initial={settings}
+          callingHoursMode={callingHoursMode}
+          providerAvailability={providerAvailability}
+        />
       </div>
     );
   } catch (error) {

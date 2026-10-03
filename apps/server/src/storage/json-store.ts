@@ -22,7 +22,14 @@ import type {
   Storage,
   TestCallRecord,
 } from './types.ts';
-import { defaultOrgSettings, type OrgSettings } from './settings.ts';
+import {
+  defaultOrgSettings,
+  normalizeExtraction,
+  normalizeTelephonyProvider,
+  normalizeVoiceProvider,
+  type OrgSettings,
+  type SettingsSeeds,
+} from './settings.ts';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -38,7 +45,10 @@ export class JsonStore implements Storage {
   private readonly settingsPath: string;
   private readonly testCallsDir: string;
 
-  constructor(private readonly dataDir: string) {
+  constructor(
+    private readonly dataDir: string,
+    private readonly seeds: SettingsSeeds = {},
+  ) {
     this.eventsDir = join(dataDir, 'events');
     this.settingsPath = join(dataDir, 'settings.json');
     this.testCallsDir = join(dataDir, 'test-calls');
@@ -46,28 +56,36 @@ export class JsonStore implements Storage {
 
   /** Org settings sit next to events/, one file for the whole deployment. */
   async getSettings(): Promise<OrgSettings> {
-    const stored = await readJson<OrgSettings>(this.settingsPath);
-    if (!stored) return defaultOrgSettings();
-    const defaults = defaultOrgSettings(stored.updatedAt);
+    const stored = await readJson<Partial<OrgSettings>>(this.settingsPath);
+    const defaults = defaultOrgSettings(stored?.updatedAt);
+    const seeded = applySettingsSeeds(defaults, this.seeds);
+    if (!stored) return seeded;
     return {
-      ...defaults,
+      ...seeded,
       ...stored,
       masterPrompts: {
-        ...defaults.masterPrompts,
-        ...stored.masterPrompts,
+        ...seeded.masterPrompts,
+        ...(stored.masterPrompts ?? {}),
       },
-      contextFields: stored.contextFields ?? defaults.contextFields,
+      contextFields: stored.contextFields ?? seeded.contextFields,
       testNumber: typeof stored.testNumber === 'string' ? stored.testNumber : null,
-      callingWindow: normalizeCallingWindow(stored.callingWindow, defaults.callingWindow),
-      retryCap: clampRetryCap(stored.retryCap, defaults.retryCap),
-      silenceSeconds: positiveLimit(stored.silenceSeconds, defaults.silenceSeconds, 5, 600),
-      maxCallSeconds: positiveLimit(stored.maxCallSeconds, defaults.maxCallSeconds, 30, 3600),
+      callingWindow: normalizeCallingWindow(stored.callingWindow, seeded.callingWindow),
+      retryCap: clampRetryCap(stored.retryCap, seeded.retryCap),
+      silenceSeconds: positiveLimit(stored.silenceSeconds, seeded.silenceSeconds, 5, 600),
+      maxCallSeconds: positiveLimit(stored.maxCallSeconds, seeded.maxCallSeconds, 30, 3600),
       dialTimeoutSeconds: positiveLimit(
         stored.dialTimeoutSeconds,
-        defaults.dialTimeoutSeconds,
+        seeded.dialTimeoutSeconds,
         10,
         180,
       ),
+      extraction: normalizeExtraction(stored.extraction, seeded.extraction),
+      voiceProvider: normalizeVoiceProvider(stored.voiceProvider, seeded.voiceProvider),
+      telephonyProvider: normalizeTelephonyProvider(
+        stored.telephonyProvider,
+        seeded.telephonyProvider,
+      ),
+      updatedAt: stored.updatedAt ?? seeded.updatedAt,
     };
   }
 
@@ -312,6 +330,19 @@ function normalizeRun(run: RunRecord): RunRecord {
     waiveRetryCap: run.waiveRetryCap === true,
     waiveCallingWindow: run.waiveCallingWindow === true,
     scheduledFor,
+  };
+}
+
+/** Environment seeds fill only the fields a settings file has never saved. */
+function applySettingsSeeds(settings: OrgSettings, seeds: SettingsSeeds): OrgSettings {
+  return {
+    ...settings,
+    extraction: normalizeExtraction(seeds.extraction, settings.extraction),
+    voiceProvider: normalizeVoiceProvider(seeds.voiceProvider, settings.voiceProvider),
+    telephonyProvider: normalizeTelephonyProvider(
+      seeds.telephonyProvider,
+      settings.telephonyProvider,
+    ),
   };
 }
 

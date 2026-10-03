@@ -6,8 +6,13 @@ import { badRequest } from './http.ts';
 import { MAX_GUEST_ATTEMPTS } from '../runner/retry-cap.ts';
 import {
   CONTEXT_FIELD_IDS,
+  EXTRACTION_MODEL_PATTERN,
+  EXTRACTION_PROVIDER_PATTERN,
   isContextFieldId,
+  TELEPHONY_PROVIDER_IDS,
+  VOICE_PROVIDER_IDS,
   type ContextFieldId,
+  type ExtractionChoice,
   type OrgSettings,
 } from '../storage/settings.ts';
 import { APPROVAL_STATUSES } from '../storage/types.ts';
@@ -428,7 +433,28 @@ export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updated
       10,
       180,
     ),
+    extraction: parseExtraction(record.extraction),
+    voiceProvider: requireOneOf(record.voiceProvider, VOICE_PROVIDER_IDS, 'voiceProvider'),
+    telephonyProvider: requireOneOf(
+      record.telephonyProvider,
+      TELEPHONY_PROVIDER_IDS,
+      'telephonyProvider',
+    ),
   };
+}
+
+/** Provider slug plus model id. Keys are not accepted in this body. */
+function parseExtraction(value: unknown): ExtractionChoice {
+  const record = asRecord(value, 'extraction');
+  const provider = requireString(record.provider, 'extraction.provider', 41);
+  const model = requireString(record.model, 'extraction.model', 121);
+  if (!EXTRACTION_PROVIDER_PATTERN.test(provider)) {
+    throw badRequest('extraction.provider must be a provider name such as openrouter or openai');
+  }
+  if (!EXTRACTION_MODEL_PATTERN.test(model)) {
+    throw badRequest('extraction.model must be a model id');
+  }
+  return { provider, model };
 }
 
 /**

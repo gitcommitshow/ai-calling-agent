@@ -13,7 +13,7 @@ import type {
   TestCall,
 } from '../domain/types';
 import type { CampaignTemplate } from '../domain/campaign-templates';
-import type { CallingHoursMode, OrgSettings } from '../domain/settings';
+import type { CallingHoursMode, OrgSettings, ProviderAvailability } from '../domain/settings';
 
 const SERVER_URL = process.env.SERVER_URL?.replace(/\/$/, '') ?? 'http://127.0.0.1:4000';
 
@@ -275,15 +275,21 @@ export async function getSummary(eventId: string): Promise<EventSummary> {
   return (await request<{ summary: EventSummary }>(`/events/${eventId}/summary`)).summary;
 }
 
-/** Org settings plus the server's calling-hours mode, which is not stored. */
+/** Org settings, calling-hours mode, and which providers already have keys. */
 export async function loadSettings(): Promise<{
   settings: OrgSettings;
   callingHoursMode: CallingHoursMode;
+  providerAvailability: ProviderAvailability | null;
 }> {
-  const body = await request<{ settings: OrgSettings; callingHoursMode?: string }>('/settings');
+  const body = await request<{
+    settings: OrgSettings;
+    callingHoursMode?: string;
+    providerAvailability?: ProviderAvailability | null;
+  }>('/settings');
   return {
     settings: body.settings,
     callingHoursMode: body.callingHoursMode === 'strict' ? 'strict' : 'soft',
+    providerAvailability: body.providerAvailability ?? null,
   };
 }
 

@@ -41,7 +41,9 @@ import {
   sameRetryCapOverrides,
   withGuestRetryCap,
 } from '../runner/retry-cap.ts';
+import type { ProviderAvailability } from '../config.ts';
 import { GuardrailError, RunConflictError, type CallRunner } from '../runner/runner.ts';
+import { adoptProviderSelection, type ProviderSelection } from '../storage/settings.ts';
 import type { TelephonyPort } from '../telephony/types.ts';
 
 /**
@@ -53,6 +55,10 @@ export interface ApiServices {
   telephony: TelephonyPort;
   /** Variables still unset before a real call can be placed, if any. */
   missingConfig?: () => string[];
+  /** Live provider choice. Updated when settings are saved. */
+  providerSelection?: ProviderSelection;
+  /** Whether each provider already has credentials. Never includes the key. */
+  providerAvailability?: (extractionProvider: string) => ProviderAvailability;
   /** STRICT_CALLING_HOURS. Omitted means soft, so older callers stay compatible. */
   callingHoursMode?: 'strict' | 'soft';
 }
@@ -302,18 +308,24 @@ const routes: Route[] = [
     },
   })),
 
-  route('GET', '/settings', async ({ storage, services }) => ({
-    status: 200,
-    body: {
-      settings: await storage.getSettings(),
-      callingHoursMode: services?.callingHoursMode === 'strict' ? 'strict' : 'soft',
-    },
-  })),
+  route('GET', '/settings', async ({ storage, services }) => {
+    const settings = await storage.getSettings();
+    return {
+      status: 200,
+      body: {
+        settings,
+        callingHoursMode: services?.callingHoursMode === 'strict' ? 'strict' : 'soft',
+        providerAvailability:
+          services?.providerAvailability?.(settings.extraction.provider) ?? null,
+      },
+    };
+  }),
 
-  route('PUT', '/settings', async ({ body, storage }) => {
+  route('PUT', '/settings', async ({ body, storage, services }) => {
     const input = parseOrgSettingsInput(body);
     const settings = { ...input, updatedAt: new Date().toISOString() };
     await storage.putSettings(settings);
+    if (services?.providerSelection) adoptProviderSelection(services.providerSelection, settings);
     return { status: 200, body: { settings } };
   }),
 
