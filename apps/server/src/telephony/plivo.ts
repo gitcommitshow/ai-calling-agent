@@ -140,7 +140,7 @@ export class PlivoTelephony implements TelephonyPort {
       dialedAt: Date.now(),
       loggedMedia: false,
     };
-    traceCall(request.attemptId, 0, 'dial accepted, machine detection 5000ms, answer waits for it');
+    traceCall(request.attemptId, 0, 'dial accepted, machine detection runs beside the stream');
     this.sessions.set(request.attemptId, session);
 
     const auth = Buffer.from(`${this.config.authId}:${this.config.authToken}`).toString('base64');
@@ -156,9 +156,13 @@ export class PlivoTelephony implements TelephonyPort {
         hangup_method: 'POST',
         ring_url: this.callbackUrl('ring', request.attemptId),
         ring_method: 'POST',
-        // Detect but do not act: we hang up ourselves so no message is left.
+        // Async, so the answer callback is not held for the analysis. A silent
+        // person is reported as a machine, and holding the answer for that
+        // result drops the call before the opening wait.
         machine_detection: 'true',
         machine_detection_time: 5000,
+        machine_detection_url: this.callbackUrl('machine', request.attemptId),
+        machine_detection_method: 'POST',
       }),
     });
 
@@ -275,14 +279,19 @@ export class PlivoTelephony implements TelephonyPort {
         res.writeHead(200, { 'content-type': 'text/xml' }).end('<Response><Hangup/></Response>');
         return;
       }
-      if (machineDetected(fields)) {
-        traceCall(attemptId, since, `answer machine=${machine}, hanging up before the audio stream`);
-        this.emit({ attemptId, kind: 'machine_detected' });
-        res.writeHead(200, { 'content-type': 'text/xml' }).end('<Response><Hangup/></Response>');
-        return;
-      }
       traceCall(attemptId, since, `answer machine=${machine}, opening the audio stream`);
       res.writeHead(200, { 'content-type': 'text/xml' }).end(this.answerXml(attemptId));
+      return;
+    }
+
+    if (kind === 'machine') {
+      const since = session ? Date.now() - session.dialedAt : 0;
+      const machine = machineField(fields);
+      traceCall(attemptId, since, `machine callback machine=${machine}`);
+      if (session && !session.terminal && machineDetected(fields)) {
+        this.emit({ attemptId, kind: 'machine_detected' });
+      }
+      res.writeHead(200, { 'content-type': 'text/plain' }).end('ok');
       return;
     }
 

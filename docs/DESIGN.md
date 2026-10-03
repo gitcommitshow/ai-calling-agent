@@ -157,7 +157,7 @@ Org settings (`data/settings.json`) hold one master prompt per campaign type and
 Guest dials still read the number from storage by guest id. A pipeline test may send `to`, or use the saved `testNumber` in org settings. Test records live in `data/test-calls/`, outside event folders, so guest results and summaries never include them. Tests skip guest guardrails (queue, event timing, calling window, retry cap) but take the same one-call-at-a-time lock as a guest run (D11). A new prompt on a test is stored only on that test record.
 
 **D14. The model decides the close; the server hangs up the phone (2026-09-29).**
-The assembled prompt already says to say a brief goodbye and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, machine detection, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits.
+The assembled prompt already says to say a brief goodbye and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, a voicemail greeting, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits.
 
 Silence is measured after the guest has spoken. Before that, org settings choose how long the guest has to start (default 3 seconds, at most 30) and how soon a pickup with no guest speech is hung up (default 15 seconds, from 5 to 120). The wait must stay shorter. The API refuses a pair that breaks that, and a stored pair that breaks it is shortened on read. If the guest speaks first, the agent answers them. If the wait passes with nobody talking, the provider starts the agent. For ElevenLabs, each call clears a dashboard greeting and sets `initial_wait_time` to that wait, so the provider stays quiet during it and then speaks once. A synthetic guest line is not sent on the audio socket: ElevenLabs closes that socket, and the runner treats the close as a failure and hangs up. If the opening update fails, the call still connects, and the no-response limit still hangs up a silent guest.
 
@@ -224,7 +224,7 @@ Where state lives: only in the server's data folder: org settings at the root, p
 A single call:
 
 1. The runner enforces runtime guardrails against the selected guest, then creates an attempt.
-2. Telephony dials the guest, with answering machine detection on.
+2. Telephony dials the guest. Answering-machine detection runs beside the audio bridge. The answer callback opens the stream and does not wait for the detector. Plivo reports a silent person as a machine, and hanging up on that flag alone ended the call before the opening wait. A machine result hangs up only after the far end has already spoken, so a voicemail greeting is not answered and a silent pickup stays up for the opening wait.
 3. When the guest answers, the provider opens the audio stream to the server.
 4. The server builds the prompt and starts the first backend with credits.
 5. Transcript turns are saved as they arrive.

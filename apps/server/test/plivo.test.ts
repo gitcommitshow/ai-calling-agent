@@ -87,6 +87,9 @@ describe('PlivoTelephony', () => {
     expect(request.to).to.equal('+919876543210');
     expect(request.answer_url).to.equal(`${baseUrl}/telephony/plivo/answer/${ATTEMPT_ID}`);
     expect(request.machine_detection).to.equal('true');
+    expect(request.machine_detection_url).to.equal(
+      `${baseUrl}/telephony/plivo/machine/${ATTEMPT_ID}`,
+    );
     fetchStub.restore();
   }
 
@@ -110,13 +113,18 @@ describe('PlivoTelephony', () => {
     await dial();
 
     // Plivo asks what to do with the answered call.
-    const answer = await callback('answer', { CallUUID: 'cu-1', CallStatus: 'in-progress' });
+    const answer = await callback('answer', {
+      CallUUID: 'cu-1',
+      CallStatus: 'in-progress',
+      Machine: 'true',
+    });
     const xml = await answer.text();
     expect(answer.status).to.equal(200);
     expect(xml).to.contain('bidirectional="true"');
     expect(xml).to.contain('audio/x-mulaw;rate=8000');
     expect(xml).to.contain(`ws://127.0.0.1:${(server.address() as AddressInfo).port}/telephony/plivo/stream/${ATTEMPT_ID}`);
     expect(xml).to.contain('<Hangup/>');
+    expect(events.some((event) => event.kind === 'machine_detected')).to.equal(false);
 
     // Plivo opens the audio socket and starts streaming the guest.
     const socket = new WebSocket(`${baseUrl.replace('http', 'ws')}/telephony/plivo/stream/${ATTEMPT_ID}`);
@@ -157,6 +165,18 @@ describe('PlivoTelephony', () => {
         payload: Buffer.from('agent-audio').toString('base64'),
       },
     });
+
+    const machine = await callback('machine', {
+      CallUUID: 'cu-1',
+      CallStatus: 'in-progress',
+      Event: 'MachineDetection',
+      Machine: 'true',
+    });
+    expect(machine.status).to.equal(200);
+    await waitFor(
+      () => events.some((event) => event.kind === 'machine_detected'),
+      'the machine event',
+    );
 
     // A webhook Plivo retries must not end the call twice.
     await callback('hangup', { CallStatus: 'completed', HangupCauseName: 'NORMAL_CLEARING' });

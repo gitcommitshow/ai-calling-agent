@@ -1073,7 +1073,16 @@ export class CallRunner {
         break;
 
       case 'machine_detected':
-        this.log(`attempt ${live.attemptId} machine detected, hanging up before the voice backend`);
+        // Plivo reports a silent person as a machine. Hanging up then drops
+        // the call before the opening wait. A greeting already in the
+        // transcript is the voicemail case, and that one still hangs up.
+        if (!live.guestSpoke) {
+          this.log(
+            `attempt ${live.attemptId} machine flag while the guest is silent, keeping the call`,
+          );
+          break;
+        }
+        this.log(`attempt ${live.attemptId} machine detected after the guest spoke, hanging up`);
         this.advance(live, 'machine_detected', 'no message was left');
         void this.deps.telephony.hangup(live.attemptId);
         live.settle({
