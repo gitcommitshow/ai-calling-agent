@@ -43,6 +43,7 @@ describe('agent end call', () => {
       }),
     ).to.equal(false);
     expect(providerCloseError(signal, 1006, 'abnormal')).to.be.instanceOf(Error);
+    expect(providerCloseError(signal, 1000, '')).to.equal(null);
 
     expect(
       noteEndCall(signal, {

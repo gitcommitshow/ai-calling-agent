@@ -133,15 +133,16 @@ export function noteEndCall(signal: EndCallSignal, message: AgentMessage): boole
 }
 
 /**
- * A socket close after the agent ended the call is a normal completion.
- * Any earlier close is still a backend failure.
+ * A socket close after the agent ended the call, or a normal close (1000),
+ * is a completion. ElevenLabs uses 1000 when it finishes the session, including
+ * when the end_call tool event never arrives. Any other code is a failure.
  */
 export function providerCloseError(
   signal: EndCallSignal,
   code: number,
   reason: Buffer | string,
 ): Error | null {
-  if (signal.ended) return null;
+  if (signal.ended || code === 1000) return null;
   return elevenLabsCloseError(code, reason);
 }
 
@@ -354,6 +355,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
           break;
         }
         default:
+          traceVoice(ctx.attemptId, `event ${message.type ?? 'none'}`);
           break;
       }
 
@@ -373,10 +375,19 @@ export class ElevenLabsBackend implements VoiceBackendPort {
       const detail = reason.toString() || 'no reason';
       traceVoice(ctx.attemptId, `socket closed ${code} ${detail.slice(0, 160)} ended=${signal.ended}`);
       if (closed) return;
-      // After end_call the provider often closes the socket itself. That is a
-      // normal completion; the drain timer still hangs the phone up.
+      // After end_call the provider often closes the socket itself. A normal
+      // close without that tool still has to play out audio already sent.
       const error = providerCloseError(signal, code, reason);
-      if (error) ctx.onError(error);
+      if (error) {
+        ctx.onError(error);
+        return;
+      }
+      if (!signal.ended) {
+        signal.ended = true;
+        signal.reason = 'elevenlabs closed the session';
+        traceVoice(ctx.attemptId, 'normal close, finishing audio already sent');
+        scheduleEnd();
+      }
     });
 
     return {
