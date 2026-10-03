@@ -302,6 +302,28 @@ code {
  * The foot separates by becoming its own band, bleeding to the card edges.
  * A background shift, per the spec, rather than a divider line.
  */
+.guest-calls {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.guest-call-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.guest-calls .chip {
+  white-space: normal;
+}
+
 .entity-card-foot {
   display: flex;
   flex-wrap: wrap;

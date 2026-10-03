@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { CampaignQuickCalls } from './CampaignQuickCalls';
+import { GuestCallList } from './GuestCallList';
 import { GuestRetryCap } from './GuestRetryCap';
 import { Icon } from './Icon';
 import {
@@ -156,6 +157,16 @@ export function GuestQueue({
     () => (campaign ? countAttemptsByGuest(attempts, campaign.id) : {}),
     [attempts, campaign],
   );
+
+  const callsByGuest = useMemo(() => {
+    const grouped = new Map<string, Attempt[]>();
+    for (const attempt of attempts) {
+      const list = grouped.get(attempt.guestId);
+      if (list) list.push(attempt);
+      else grouped.set(attempt.guestId, [attempt]);
+    }
+    return grouped;
+  }, [attempts]);
 
   const latestByGuest = useMemo(
     () => (campaign ? latestAttemptByGuest(attempts, campaign.id) : {}),
@@ -465,6 +476,13 @@ export function GuestQueue({
             <span>{callResult}</span>
           </p>
         ) : null}
+
+        <GuestCallList
+          eventId={event.id}
+          timezone={event.timezone}
+          attempts={callsByGuest.get(guest.id) ?? []}
+          campaigns={campaigns}
+        />
 
         {campaignForCalls ? (
           <GuestRetryCap
