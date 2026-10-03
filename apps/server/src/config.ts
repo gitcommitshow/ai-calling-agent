@@ -41,6 +41,10 @@ export interface CallLimits {
   maxCallSeconds: number;
   silenceSeconds: number;
   dialTimeoutSeconds: number;
+  /** Seconds a silent guest has before the agent starts the call. */
+  openingWaitSeconds: number;
+  /** Seconds from answer before a guest who never speaks is hung up. */
+  noResponseSeconds: number;
 }
 
 export interface ServerConfig {
@@ -144,6 +148,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       maxCallSeconds: positiveInt(env.MAX_CALL_SECONDS, 240),
       silenceSeconds: positiveInt(env.SILENCE_SECONDS, 20),
       dialTimeoutSeconds: positiveInt(env.DIAL_TIMEOUT_SECONDS, 45),
+      openingWaitSeconds: 3,
+      noResponseSeconds: 15,
     },
     strictCallingHours: boolean(env.STRICT_CALLING_HOURS, false),
   };

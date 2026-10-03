@@ -8,6 +8,7 @@
 import type { CallLimits } from '../config.ts';
 import type { ExtractionPort } from '../extraction/types.ts';
 import { allUnknown } from '../extraction/types.ts';
+import { shouldHangUpForNoResponse } from '../voice/opening.ts';
 import { newAttemptId, newQuestionId, newRunId, newTestCallId } from '../storage/ids.ts';
 import { emptyEventBrief } from '../storage/types.ts';
 import type {
@@ -1110,6 +1111,8 @@ export class CallRunner {
         maxCallSeconds: settings.maxCallSeconds,
         silenceSeconds: settings.silenceSeconds,
         dialTimeoutSeconds: settings.dialTimeoutSeconds,
+        openingWaitSeconds: settings.openingWaitSeconds,
+        noResponseSeconds: settings.noResponseSeconds,
       };
     } catch {
       return this.deps.limits;
@@ -1119,13 +1122,14 @@ export class CallRunner {
   /** Bridge the answered call to the voice backend and arm the call guardrails. */
   private async startVoice(live: LiveCall, channel: AudioChannel): Promise<void> {
     const limits = await this.resolveLimits();
-    let lastGuestTurnAt = Date.now();
-    // Annotated because it re-arms itself: the guest may simply be slow, and
-    // only a full quiet period should end the call.
+    const answeredAt = Date.now();
+    let lastGuestTurnAt = answeredAt;
+    // After the guest has spoken, a full quiet period ends the call. The
+    // opening, before any guest speech, is the no-response limit instead.
     const armSilence = (): NodeJS.Timeout => {
       const timer = setTimeout(() => {
         if (live.settled) return;
-        if (Date.now() - lastGuestTurnAt < limits.silenceSeconds * 1000) {
+        if (!live.guestSpoke || Date.now() - lastGuestTurnAt < limits.silenceSeconds * 1000) {
           live.timers.push(armSilence());
           return;
         }
@@ -1139,6 +1143,26 @@ export class CallRunner {
       }, limits.silenceSeconds * 1000);
       return timer;
     };
+
+    live.timers.push(
+      setTimeout(() => {
+        if (live.settled) return;
+        if (!shouldHangUpForNoResponse({
+          elapsedMs: Date.now() - answeredAt,
+          limitMs: limits.noResponseSeconds * 1000,
+          guestSpoke: live.guestSpoke,
+        })) {
+          return;
+        }
+        void this.deps.telephony.hangup(live.attemptId);
+        live.settle({
+          reason: 'completed',
+          detail: `no guest response within ${limits.noResponseSeconds}s`,
+          machine: false,
+          error: null,
+        });
+      }, limits.noResponseSeconds * 1000),
+    );
 
     let prompt: string;
     try {
@@ -1160,11 +1184,15 @@ export class CallRunner {
         attemptId: live.attemptId,
         prompt,
         language: live.language,
+        answeredAt,
+        openingWaitMs: limits.openingWaitSeconds * 1000,
         channel,
         onTranscript: (turn: TranscriptTurn) => {
           if (turn.role === 'guest') {
+            const firstGuestTurn = !live.guestSpoke;
             live.guestSpoke = true;
             lastGuestTurnAt = Date.now();
+            if (firstGuestTurn) live.timers.push(armSilence());
           }
           live.snapshot = {
             ...live.snapshot,
@@ -1218,7 +1246,6 @@ export class CallRunner {
           });
         }, limits.maxCallSeconds * 1000),
       );
-      live.timers.push(armSilence());
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       void this.deps.telephony.hangup(live.attemptId);

@@ -10,6 +10,12 @@ import type { VoiceConfig } from '../config.ts';
 import type { TranscriptTurn, VoiceBackend } from '../storage/types.ts';
 import { fromElevenLabs, parseElevenLabsAudioFormat, toElevenLabs } from './audio.ts';
 import {
+  OPENING_NUDGE,
+  isOpeningNudge,
+  shouldNudgeOpening,
+  withOpeningTurn,
+} from './opening.ts';
+import {
   VoiceQuotaError,
   type VoiceBackendPort,
   type VoiceSession,
@@ -175,6 +181,32 @@ export class ElevenLabsBackend implements VoiceBackendPort {
     return (body.character_count ?? 0) < body.character_limit;
   }
 
+  /**
+   * Clear a dashboard greeting and hold the provider's own opening timer past
+   * our hangup. A failure here still leaves the in-session nudge to start the call.
+   */
+  private async prepareOpening(): Promise<void> {
+    const url = `${API}/convai/agents/${encodeURIComponent(this.config.agentId)}`;
+    const headers = {
+      'xi-api-key': this.config.apiKey,
+      'content-type': 'application/json',
+    };
+    try {
+      const response = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
+      if (!response.ok) return;
+      const agent = (await response.json()) as unknown;
+      const patch = await fetch(url, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(withOpeningTurn(agent)),
+        signal: AbortSignal.timeout(8_000),
+      });
+      await patch.arrayBuffer();
+    } catch {
+      return;
+    }
+  }
+
   /** Short-lived URL, so the API key never travels in a WebSocket query string. */
   private async signedUrl(): Promise<string> {
     const url = `${API}/convai/conversation/get-signed-url?agent_id=${encodeURIComponent(this.config.agentId)}`;
@@ -192,6 +224,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
   }
 
   async start(ctx: VoiceSessionContext): Promise<VoiceSession> {
+    await this.prepareOpening();
     const signed = await this.signedUrl();
     const socket = new WebSocket(signed);
 
@@ -204,6 +237,18 @@ export class ElevenLabsBackend implements VoiceBackendPort {
     const drain = new GoodbyeDrain(() => Date.now(), GOODBYE_PAD_MS);
     const signal = createEndCallSignal();
     let drainTimer: NodeJS.Timeout | null = null;
+    let nudgeTimer: NodeJS.Timeout | null = null;
+    let guestSpoke = false;
+    let agentStarted = false;
+
+    /** The agent has taken the opening, so a late nudge must not greet again. */
+    const noteAgentStarted = (): void => {
+      agentStarted = true;
+      if (nudgeTimer) {
+        clearTimeout(nudgeTimer);
+        nudgeTimer = null;
+      }
+    };
 
     /** Hang up only after audio already sent to the phone has had time to play. */
     const scheduleEnd = (): void => {
@@ -243,6 +288,24 @@ export class ElevenLabsBackend implements VoiceBackendPort {
       }),
     );
 
+    const nudgeIn = Math.max(0, ctx.openingWaitMs - (Date.now() - ctx.answeredAt));
+    nudgeTimer = setTimeout(() => {
+      nudgeTimer = null;
+      if (closed || socket.readyState !== WebSocket.OPEN) return;
+      if (
+        !shouldNudgeOpening({
+          elapsedMs: Date.now() - ctx.answeredAt,
+          limitMs: ctx.openingWaitMs,
+          guestSpoke,
+          agentStarted,
+        })
+      ) {
+        return;
+      }
+      agentStarted = true;
+      socket.send(JSON.stringify({ type: 'user_message', text: OPENING_NUDGE }));
+    }, nudgeIn);
+
     ctx.channel.onAudio((frame) => {
       if (!formatsReady) {
         queuedGuest.push(frame);
@@ -273,6 +336,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
         case 'audio': {
           const payload = message.audio_event?.audio_base_64;
           if (payload) {
+            noteAgentStarted();
             const frame = fromElevenLabs(Buffer.from(payload, 'base64'), outputFormat);
             ctx.channel.send(frame);
             drain.noteFrame(frame.length);
@@ -295,12 +359,21 @@ export class ElevenLabsBackend implements VoiceBackendPort {
           break;
         case 'user_transcript': {
           const text = message.user_transcription_event?.user_transcript;
-          if (text) ctx.onTranscript(turn('guest', text));
+          if (!text || isOpeningNudge(text)) break;
+          guestSpoke = true;
+          if (nudgeTimer) {
+            clearTimeout(nudgeTimer);
+            nudgeTimer = null;
+          }
+          ctx.onTranscript(turn('guest', text));
           break;
         }
         case 'agent_response': {
           const text = message.agent_response_event?.agent_response;
-          if (text) ctx.onTranscript(turn('agent', text));
+          if (text) {
+            noteAgentStarted();
+            ctx.onTranscript(turn('agent', text));
+          }
           break;
         }
         default:
@@ -329,6 +402,7 @@ export class ElevenLabsBackend implements VoiceBackendPort {
       },
       close: async () => {
         closed = true;
+        if (nudgeTimer) clearTimeout(nudgeTimer);
         if (drainTimer) clearTimeout(drainTimer);
         if (socket.readyState === WebSocket.OPEN) socket.close();
       },

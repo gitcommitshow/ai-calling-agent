@@ -21,7 +21,13 @@ import type { VoiceBackendPort, VoiceSessionContext } from '../src/voice/types.t
 
 // Fixed clock: before the event, 16:00 IST, so the calling window is open.
 const NOW = new Date('2026-10-05T10:30:00.000Z');
-const LIMITS = { maxCallSeconds: 30, silenceSeconds: 30, dialTimeoutSeconds: 30 };
+const LIMITS = {
+  maxCallSeconds: 30,
+  silenceSeconds: 30,
+  dialTimeoutSeconds: 30,
+  openingWaitSeconds: 3,
+  noResponseSeconds: 15,
+};
 
 const event: EventRecord = {
   id: 'launch-party-1234abcd',
