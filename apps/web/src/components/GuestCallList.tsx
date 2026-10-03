@@ -1,6 +1,7 @@
 /**
  * Calls already placed to one guest, newest first. Each row links the campaign
- * that dialed and shows the answers that call captured.
+ * that dialed, shows the answers that call captured, and folds the transcript
+ * the same way the campaign queue does.
  */
 import Link from 'next/link';
 import { capturedAnswers } from '../domain/captured';
@@ -11,6 +12,7 @@ import {
   type Campaign,
 } from '../domain/types';
 import { formatInZone } from '../lib/time';
+import { CallTranscript } from './CallTranscript';
 import { Icon } from './Icon';
 import { CALL_OUTCOME_ICONS } from './status-icons';
 
@@ -60,6 +62,13 @@ export function GuestCallList({ eventId, timezone, attempts, campaigns }: Props)
                   </span>
                 ))}
               </span>
+            ) : null}
+            {attempt.transcript.length > 0 ? (
+              <CallTranscript
+                transcript={attempt.transcript}
+                startedAt={attempt.startedAt}
+                timezone={timezone}
+              />
             ) : null}
           </li>
         );

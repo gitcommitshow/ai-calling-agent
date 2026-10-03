@@ -320,8 +320,16 @@ code {
   min-width: 0;
 }
 
+.guest-calls > li {
+  min-width: 0;
+}
+
 .guest-calls .chip {
   white-space: normal;
+}
+
+.guest-calls .call-transcript {
+  min-width: 0;
 }
 
 .entity-card-foot {
