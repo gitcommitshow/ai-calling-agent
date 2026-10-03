@@ -70,6 +70,8 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ The organizer sets one master prompt per campaign type, and a campaign can use its own prompt instead.
 - ✓ The organizer chooses which event and guest details a call may include. The phone number is excluded unless they allow it.
 - ✓ The campaign editor shows the exact prompt the call will use.
+- ✓ One personality on the settings page sets tone and length for every call, including a pipeline test and a campaign with its own prompt. Blank adds nothing. It does not carry the event, the guest, or the purpose of the call.
+- ✓ Before the event, the opening states when it starts, when it ends, and where to attend, even if the guest does not ask. The rest of the description waits until they ask. After the event, time and place come up only if they ask or it still matters.
 - ✓ One pre-event attempt and one post-event attempt per guest in the initial pass, unless the organizer explicitly retries. Do not start a post-event campaign before the event ends, or a pre-event campaign after it starts.
 - ✓ Place calls only in a reasonable local window. Cap retries.
 - ✓ Phase 1 places calls to Indian numbers only. Guests with another country code stay on the list and are not dialed. The default window is 10:00-20:00 IST, editable per campaign.
@@ -92,8 +94,8 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ Run the conversation with the organizer's campaign prompt plus synced event and guest context.
 - ✓ End the call when the guest asks to stop, after a short goodbye.
 - ✓ End the call when the conversation is finished and neither side has more to add, after a short goodbye.
-- ✓ Keep silence and the maximum call length as safety limits for a call that never reaches either close.
-- ✓ On answer, the agent waits for the guest to speak, then starts the call if they have not. The organizer sets that wait and how soon a pickup with no guest speech ends. The defaults are 3 seconds and 15 seconds.
+- ✓ Keep silence after the guest has spoken, a pickup with no guest speech, and the maximum call length as safety limits for a call that never reaches either close.
+- ✓ On answer, the agent waits for the guest to speak. If they speak, it answers them. If they stay quiet, it starts the call. A saved provider greeting waits with them. The organizer sets that wait and how soon a silent pickup ends. The defaults are 3 seconds and 15 seconds, the wait stays shorter than that hangup, and both apply to every live call.
 - ✓ The organizer can see whether the agent is allowed to hang up, turn that on or off, and set the instructions for when it should. A spoken goodbye hangs up only when that tool is on and the agent uses it.
 - ✓ Record call outcome: answered, no answer, voicemail, declined, hung up, or failed.
 - ✓ Do not leave voicemail messages in phase 1.
@@ -125,6 +127,16 @@ Before a campaign dials guests, the organizer can place one test call through th
 - ✓ A test call does not dial the guest list, does not count as a guest attempt, and does not write back to the event platform. It is allowed outside the calling window and outside the pre-event and post-event timing rules.
 - ✓ The organizer can review that test attempt (outcome and transcript) apart from guest results and the event summary.
 
+### Local voice check
+
+A phone test needs a public address and a handset, so trying the conversation that way is slow. The organizer can run the same conversation on this machine, through the browser microphone and speakers, with no phone call.
+
+- It uses the same prompt, opening wait, no-response hangup, silence limit, length cap, and agent hangup as a live call.
+- A quiet microphone is a silent guest. The agent starts after the opening wait. If the organizer still has not spoken, the session ends at the no-response limit.
+- When the organizer speaks, the agent answers. The session ends when the agent hangs up, or when a safety limit fires.
+- The outcome and transcript are reviewed the same way as a pipeline test. No guest is dialed, no guest attempt is created, and nothing is written back to the event platform.
+- It still talks to the configured voice provider. Automated tests stay on fakes and do not open this session.
+
 ### Results and review
 
 - ✓ Store a structured result per attempt: call outcome and the campaign's captured fields.
@@ -136,16 +148,16 @@ Before a campaign dials guests, the organizer can place one test call through th
 
 ## Non-goals
 
-- Selling, recruiting, or any call that is not for a specific event the organizer named. Pipeline test calls are in scope: they check this product, and they are not a general dialer.
+- Selling, recruiting, or any call that is not for a specific event the organizer named. Pipeline test calls and a local voice check are in scope: they check this product, and they are not a general dialer.
 - Registering people, selling tickets, or deciding the agenda. We integrate with the event platform; we do not replace it.
-- Prescribing call scripts or nudge wording in product requirements. The organizer owns what the call is for via the campaign prompt, and owns how the agent talks via one personality on the settings page. That personality is tone and length only. Two shared rules stay outside it: before the event, state timing and place without being asked; and answer only from the event brief, promising a team callback when a fact is missing.
+- Prescribing call scripts or nudge wording. The organizer owns the campaign prompt and the personality. Timing, place, and the unanswered-question rule stay outside both.
 - Inbound support, live help during the event, or a multi-day drip of reminder calls. A callback the organizer places from a recorded question is in scope. An inbound call is not.
 - Shipping every event platform or voice vendor in phase 1.
 - Choosing concrete architecture, repo layout, or UI. Those stay open until [DESIGN.md](DESIGN.md).
 
 ## Constraints
 
-- Call only guests on the loaded list who have a usable phone number and whom the organizer selected. A pipeline test call is the exception: it dials the fixed test number or a number the organizer entered for that test, and never the guest list.
+- Call only guests on the loaded list who have a usable phone number and whom the organizer selected. A pipeline test call is the exception: it dials the fixed test number or a number the organizer entered for that test, and never the guest list. A local voice check dials nobody.
 - Pre-event calls happen only before the event. Post-event calls happen only after it.
 - **Phase 1 resources:** use existing subscriptions where we have them. Telephony anchors on **Plivo**. TTS anchors on **ElevenLabs**. Event platform anchors on **Luma**. STT and LLM use whatever we already have access to that covers English, Hindi, and local Indian languages; pick specifics in design.
 - Treat phone numbers, call audio or transcripts, prompts, and platform or provider tokens as private to that organizer and event.
@@ -163,6 +175,7 @@ Before a campaign dials guests, the organizer can place one test call through th
 - When a guest's answer is clear and a connected platform supports it, RSVP or attendance is written back, or a sync failure is visible if write-back fails.
 - Phase 1 can complete an outbound call using the phase-1 resources above, including guest speech in English or Hindi.
 - ✓ A pipeline test hangs up after the answerer asks to cut the call, and hangs up on its own once both sides are done, without waiting out the silence limit or the maximum length.
+- ✓ A quiet answer starts after the opening wait, a guest who speaks first is answered without a second greeting, and a pickup with no guest speech is stored as hung up. A pre-event opening states the start, the end, and the place.
 - ✓ The organizer can list per-guest results and an event summary without listening to the calls.
 - When a guest asks for a fact the brief does not contain, the call says the team will check and call back, and that question is highlighted and linked to calling that guest.
 - When a guest asks for a fact the brief does contain, the call answers with it, and no open question is stored.
@@ -171,5 +184,7 @@ Before a campaign dials guests, the organizer can place one test call through th
 - ✓ A guest call never dials a number that was not on the loaded list.
 - ✓ One click on the global test link calls the fixed test number through the same pipeline as a guest call.
 - ✓ One click on an event's test link calls that fixed number with the event's prompt and event details, so the answerer hears what that event's attendees would hear.
+- On this machine, with no public address and no phone, a quiet local session lets the agent start after the opening wait and ends at the no-response limit when the organizer never speaks.
+- When the organizer speaks in that local session, the transcript is kept and the session ends on the agent hangup or a safety limit, and no guest number is dialed.
 - ✓ The organizer can send that test to a number they enter, using an existing prompt or a new prompt, without changing the saved campaign prompt or creating a guest attempt.
 - When the preferred voice provider has no credits, the next call still completes on another approach, and the attempt shows which approach was used.

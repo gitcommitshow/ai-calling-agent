@@ -55,7 +55,7 @@ flowchart LR
 
 **Application domain (in the web app).** Product-specific rules live in `apps/web`: guest filtering and ordering, call eligibility policy, prompt assembly policy, campaign templates, and CSV-to-domain mapping. This logic is intentionally not packaged as a shared library, because it is tightly coupled to this product's requirements and UI behavior. Keep it modular inside the app so it can be moved out later only if reuse becomes real.
 
-**Storage (in the server).** Storage stays inside `apps/server` in phase 1. It uses a small storage interface with one JSON-file implementation. Org settings live in a single `settings.json` at the data root (master prompts and the context allowlist). Each event gets its own folder, holding the event, its guests, each campaign, and each attempt in separate files. Separate files keep writes small and keep events isolated from each other. Writes are atomic: write a temporary file, then rename it into place.
+**Storage (in the server).** Storage stays inside `apps/server` in phase 1. It uses a small storage interface with one JSON-file implementation. Org settings live in a single `settings.json` at the data root: personality, master prompts, the context allowlist, the test number, dialing defaults, live call limits, and provider choices. Each event gets its own folder, holding the event, its guests, each campaign, and each attempt in separate files. Separate files keep writes small and keep events isolated from each other. Writes are atomic: write a temporary file, then rename it into place.
 
 **Guest import (in the web app).** CSV import stays in `apps/web` for phase 1 because it is small and tightly coupled to upload and preview UX. The web app parses the Luma CSV, maps statuses and known columns into a normalized guest payload, keeps unknown columns (such as custom questions) as extra attributes, shows skipped-without-phone counts, and submits the payload to the server API. Rows that share a phone are collapsed before that submit. The server validates before persistence, replaces imported guests, and leaves guests the organizer added by hand (D17). A status it cannot map is stored as `unknown` rather than guessed, so it stays visible and filterable.
 
@@ -90,7 +90,7 @@ A run is a stored record. The organizer can start it, watch it, stop it, and see
 
 The runner assembles the prompt itself, rather than being handed one, because it works long after the organizer's request returned. That assembly mirrors the web app's preview module; the README promises the preview is the text a call uses, so the two change together (D5 keeps them unshared for now). Assembly always appends the event brief, the org personality and the logistics line (D19), and the shared unanswered-question rule (D15).
 
-**Server API.** A JSON HTTP API with operations for the web app: manage org settings (agent personality, master prompts, context allowlist, fixed test number), manage events (including a Luma link import and the event description), import guests, list and filter guests, manage campaigns (prompt source, fields, language, voice backend order, calling window, queue order), start and stop a run, call one guest, place a follow-up call for an open question, mark an open question resolved, place and list pipeline tests, check credits, and read results and summaries. The server also exposes the telephony callback endpoints and the audio WebSocket endpoint. These are defined by the telephony adapter and only reached by the telephony provider.
+**Server API.** A JSON HTTP API with operations for the web app: manage org settings (agent personality, live call limits, master prompts, context allowlist, fixed test number), manage events (including a Luma link import and the event description), import guests, list and filter guests, manage campaigns (prompt source, fields, language, voice backend order, calling window, queue order), start and stop a run, call one guest, place a follow-up call for an open question, mark an open question resolved, place and list pipeline tests, check credits, and read results and summaries. The server also exposes the telephony callback endpoints and the audio WebSocket endpoint. These are defined by the telephony adapter and only reached by the telephony provider.
 
 Calling endpoints refuse clearly instead of half-working. A server with no adapters wired in answers 501. A missing credential answers 503 and names the variable to set. A second run or test call while one is going answers 409. A guest a guardrail refuses answers 400 with that reason. `GET /health` reports whether calling is ready, so the cause is visible before a run is attempted.
 
@@ -157,13 +157,15 @@ Org settings (`data/settings.json`) hold one master prompt per campaign type and
 Guest dials still read the number from storage by guest id. A pipeline test may send `to`, or use the saved `testNumber` in org settings. Test records live in `data/test-calls/`, outside event folders, so guest results and summaries never include them. Tests skip guest guardrails (queue, event timing, calling window, retry cap) but take the same one-call-at-a-time lock as a guest run (D11). A new prompt on a test is stored only on that test record.
 
 **D14. The model decides the close; the server hangs up the phone (2026-09-29).**
-The assembled prompt already says to say a brief goodbye and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, machine detection, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits. Silence is measured after the guest has spoken. Before that, the settings page chooses how long the guest has to start, defaulting to 3 seconds, and how soon a pickup with no guest speech is hung up, defaulting to 15 seconds. If they do not speak in the opening wait, the voice backend asks the agent to greet.
+The assembled prompt already says to say a brief goodbye and hang up when they are busy or ask to end. That sentence does not drop the line. The runner hangs up on guest silence, the length cap, machine detection, a backend failure, the far end, or the organizer. A guest who asks to cut the call has just spoken, so the silence timer starts over, and a finished conversation stays up until one of those limits.
+
+Silence is measured after the guest has spoken. Before that, org settings choose how long the guest has to start (default 3 seconds, at most 30) and how soon a pickup with no guest speech is hung up (default 15 seconds, from 5 to 120). The wait must stay shorter. The API refuses a pair that breaks that, and a stored pair that breaks it is shortened on read. If the guest speaks first, the agent answers them. If the wait passes with nobody talking, the provider starts the agent. For ElevenLabs, each call clears a dashboard greeting and sets `initial_wait_time` to that wait, so the provider stays quiet during it and then speaks once. A synthetic guest line is not sent on the audio socket: ElevenLabs closes that socket, and the runner treats the close as a failure and hangs up. If the opening update fails, the call still connects, and the no-response limit still hangs up a silent guest.
 
 The voice backend reports one end-call signal. The runner lets the goodbye audio finish, then hangs up. ElevenLabs delivers that signal as `agent_tool_response` for the built-in `end_call` system tool (on by default for a dashboard agent; add it under `built_in_tools` for an agent created by API). A per-call prompt override leaves that tool in place. The tool's own instructions cover a completed task, a mutual close, and the guest asking to stop, in whatever language the call is in. The assembled prompt keeps its one-line reminder so every campaign and pipeline test inherits it. Matching phrases in the transcript was rejected, because the same request shows up in many wordings. A provider socket that closes because the agent ended the call is a normal completion. A cascaded backend later gives its LLM the same tool and reports the same signal.
 
 Settings reads that tool from the configured ElevenLabs agent and can turn it on or off, and can replace its instructions. A blank instruction is saved as the default: hang up after saying goodbye. The change is stored on the agent, so later calls on that agent id use it, including ones whose prompt only says to hang up. A call already connected keeps the tool it started with. Only that card writes the agent.
 
-An agent hangup after the guest spoke is stored as `answered`, with the close on the attempt timeline. `SILENCE_SECONDS` and `MAX_CALL_SECONDS` stay as the backstop when the model never signals.
+An agent hangup after the guest spoke is stored as `answered`, with the close on the attempt timeline. The no-response limit, silence after the guest has spoken, and the maximum length stay as the backstop when the model never signals.
 
 **D15. An unanswered question is a saved callback, not a guess (2026-09-29).**
 The event has one description the agent may say. The usual way to fill it is a Luma event link: the server fetches that public page once, reads the name, times, place, and description from the page, and creates the event when that link is not already stored. The same link again opens the existing event. A later check fetches the page again and replaces the name, times, and description. Guests are left as they are. Entering an event by hand is the secondary path, and its start defaults to five hours from now. Prompt assembly in both apps always appends that description and one shared instruction, the same way every call inherits the close rule (D14). The instruction is: answer only from the brief and the call context; when the guest asks for something that is not there, say once that the team will check and someone will call them back; do not invent the missing fact. The brief is not on the context allowlist (D12). Turning it off would leave the call with nothing to say except an apology. The organizer still owns the campaign prompt.
@@ -184,9 +186,32 @@ The organizer can type in a guest who is not on the CSV: a name and a phone numb
 Org settings hold the default window, copied onto each new campaign. The runner enforces that copy. Outside it, a start or a schedule is refused until the organizer confirms twice, and that waiver is stored on the run. `STRICT_CALLING_HOURS` ignores the waiver. A scheduled run is put back on the clock after a restart. A start that passed while the server was down is marked failed.
 
 **D19. The agent stays short and calm, and still states logistics (2026-10-03).**
-Org settings hold one personality: how the agent talks on every call. Tone and length only. The settings page edits it, and a blank value adds nothing. Prompt assembly appends that text. It does not name the event, the guest, or what the call is for. The default asks for short, calm sentences, no excitement, and details only when the guest asks.
+Org settings hold one personality: how the agent talks on every call, including a pipeline test and a campaign with its own prompt. Tone and length only. The settings page edits it. A blank value adds nothing, and a missing value uses the default so an older settings file still has a style. Prompt assembly appends that text. It does not name the event, the guest, or what the call is for. The default asks for short, calm sentences, no excitement, and details only when the guest asks.
 
 Logistics stay a separate line in assembly, because they depend on the campaign type. Before the event, the opening states when it starts, when it ends, and where to attend (the venue, or that it is online), taken from the call context and the brief. The rest of the description stays unused until the guest asks. After the event, those come up only if the guest asks or they still matter to the question. The organizer still owns what the call is for, in the master prompt or the campaign prompt.
+
+**D20. A local voice session reuses the answered-call path and skips the phone network (2026-10-03). Not built.**
+A pipeline test and the e2e call both dial through Plivo. That needs a public https origin, a tunnel when the server is on a laptop, and a handset. The opening wait, a silent guest, the agent starting, and the hangup live on our server and the voice provider, so they can be heard without that dial.
+
+Already in place, and the session keeps these:
+
+- The voice backend only sees an audio channel of 8 kHz mu-law frames, plus the prompt, the language, and the answer time. Plivo is what fills that channel today. ElevenLabs transcodes those frames itself.
+- The runner starts the voice backend only after answer, then applies the opening wait, the no-response hangup, silence after the guest has spoken, the length cap, and the agent end-call signal (D14).
+- A pipeline test already builds the prompt with a stand-in guest, skips guest guardrails, and stores its record outside guest results (D13).
+- `npm test` replaces telephony and the voice backend with fakes. That suite cannot show whether the provider waits, speaks, or closes the socket.
+
+Still to add:
+
+- A page next to the pipeline tests where the organizer speaks and listens in the browser. The browser talks only to our server, on localhost. It never receives the provider key or a signed URL. The server still opens the provider socket, so the server stays between the speaker and the voice backend (D1).
+- A local audio channel with the same frame contract. It turns browser microphone audio into 8 kHz mu-law frames and plays agent frames back. The ElevenLabs adapter stays as it is.
+- The session connects as an already answered call. Answer time is when that browser socket is up, so the opening wait and the no-response timer use the same clocks as a phone pickup.
+- A quiet microphone sends no speech. The channel must not invent a guest turn or a transcript line. A synthetic guest line on the provider socket is what cut a silent pickup at the opening wait.
+- Ending the session closes the voice backend and the browser socket. There is no telephony hangup. The outcome and transcript are stored like a pipeline test, and the request carries no phone number, so D13 still holds.
+- The one-call lock (D11) covers this session. A local session and a phone call do not run together.
+- The opening update still writes the shared provider agent before the session, the same way a phone call does. The next phone call on that agent id sees that config.
+- This check calls the live voice provider, so it stays out of `npm test` and out of CI. The e2e call remains the check that includes the phone network.
+
+Sending the browser straight to ElevenLabs was rejected, because that skips the opening update, the hangup timers, and the transcript store. Driving the Plivo media socket from localhost was rejected, because Plivo still needs a public callback URL before that socket exists.
 
 ## Data and control flow
 
@@ -213,7 +238,8 @@ The number for a guest call is always read from storage using the guest's id, ne
 - **Credit or quota failure:** fallback as in D2. Always visible on the attempt and in the run status, never silent.
 - **Dial failure, busy, rejected, no answer, voicemail:** stored as the outcome, with captured fields left unknown. No automatic retry. The organizer retries explicitly, up to the campaign's cap.
 - **Agent close:** when the voice backend reports the conversation is over, the goodbye audio is allowed to finish and the call is hung up (D14). This covers a guest who asks to stop, and a conversation where neither side has more to add.
-- **Silence:** after `SILENCE_SECONDS` without guest speech, and only when the agent never closed the call, the call is hung up and ends as answered or hung up, depending on whether the guest ever spoke.
+- **No response:** if the guest never speaks by the saved no-response limit, the call is hung up and stored as `hung_up`.
+- **Silence:** after the guest has spoken, the saved silence limit without further guest speech hangs the call up as `answered`, unless the agent already closed it.
 - **Call length:** `MAX_CALL_SECONDS` is a hard cap per call, so a stuck conversation can't run forever. A call that is never answered is dropped after `DIAL_TIMEOUT_SECONDS`.
 - **Voice backend failure mid-call:** the call is hung up and the attempt ends as failed, with the backend and its message on the attempt. Automatic fallback to another backend is phase 3 (D2).
 - **Extraction failure:** the transcript is kept, the fields become unknown, no open question is stored, and the error is recorded. Extraction can be re-run later.
@@ -230,7 +256,8 @@ The number for a guest call is always read from storage using the guest's id, ne
 - ✓ filtering and ordering;
 - ✓ eligibility rules;
 - ✓ prompt building;
-- prompt building appends the event brief, the short calm speaking rule, and the callback instruction, and a pipeline test does not produce an open question;
+- ✓ prompt building appends the personality when set, the logistics line, the event brief, and the callback instruction, and a pipeline test does not produce an open question;
+- ✓ opening: a quiet guest is greeted after the wait, a guest who already spoke keeps that turn, and a dashboard greeting is cleared;
 - extraction keeps a question the brief does not answer, and drops one the brief does answer;
 - a follow-up call from an open question is allowed after the retry cap, and resolving the question removes it from the highlight;
 - ✓ atomic storage writes;
@@ -240,6 +267,8 @@ The number for a guest call is always read from storage using the guest's id, ne
 - fallback on quota errors, once phase 3 adds it.
 
 `npm run test:e2e` covers one real outbound call to a test number, end to end. It skips itself unless `E2E_TEST_NUMBER` and the provider credentials are set, so nobody triggers a live call by accident.
+
+A local voice session (D20) is a manual check on this machine. It is not part of either suite: `npm test` never opens the provider, and the e2e call is the one that still includes the phone network.
 
 Tests keep to at most three cases per area: one that works, and one or two that fail, so a review stays readable.
 
@@ -301,5 +330,5 @@ Checkpoint for MVP complete:
 ## Open questions
 
 - Plivo outbound calling in India needs a compliant caller ID. Confirm the account setup before the first live call; `PLIVO_CALLER_ID` has no default for that reason.
-- Callbacks and the audio socket need a public https origin. Locally that means a tunnel, and `PUBLIC_BASE_URL` has to match it exactly, because the Plivo signature is checked against that origin.
+- Callbacks and the audio socket need a public https origin. Locally that means a tunnel, and `PUBLIC_BASE_URL` has to match it exactly, because the Plivo signature is checked against that origin. A local voice session (D20) is how the conversation is tried without that tunnel. A phone call still needs it.
 - The default text-to-speech for the cascaded backend, and which Indian-language voices sound best.
