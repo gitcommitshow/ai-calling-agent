@@ -6,6 +6,7 @@ declare module 'sinon' {
   export interface SinonStub {
     (...args: never[]): any;
     resolves(value?: unknown): SinonStub;
+    callsFake(fn: (...args: any[]) => unknown): SinonStub;
     firstCall: { args: any[] };
     restore(): void;
     called: boolean;

@@ -2,15 +2,20 @@
  * Events home: create an event and open one. Reads through the server API.
  */
 import Link from 'next/link';
-import { EventForm } from '../components/EventForm';
 import { Icon } from '../components/Icon';
+import { NewEvent } from '../components/NewEvent';
 import { listEvents } from '../lib/server-api';
 import { formatInZone } from '../lib/time';
 import type { Event } from '../domain/types';
 
 export const dynamic = 'force-dynamic';
 
-export default async function EventsPage() {
+export default async function EventsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ lumaError?: string }>;
+}) {
+  const { lumaError } = await searchParams;
   let events: Event[] = [];
   let error: string | null = null;
   try {
@@ -31,16 +36,13 @@ export default async function EventsPage() {
 
       <section className="card">
         <h2>New event</h2>
-        <p className="small muted">
-          A guest CSV carries no event details, so enter the name and times here.
-        </p>
-        <EventForm />
+        <NewEvent lumaError={lumaError ?? null} />
       </section>
 
       <section className="card">
         <h2>Your events</h2>
         {events.length === 0 ? (
-          <p className="empty">No events yet. Create one above, then import a Luma CSV.</p>
+          <p className="empty">No events yet. Paste a Luma link above, then import a guest CSV.</p>
         ) : (
           <div className="card-grid">
             {events.map((event) => (

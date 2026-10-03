@@ -1,11 +1,12 @@
 /**
  * Event creation for the browser. Creates the event on the server, then adds the
  * app's default pre-event and post-event campaigns: the templates are product
- * policy and belong to this app, not to the server.
+ * policy and belong to this app, not to the server. New campaigns copy calling
+ * hours and retry cap from org settings.
  */
 import { NextResponse } from 'next/server';
 import { campaignTemplates } from '../../../domain/campaign-templates';
-import { createCampaign, createEvent, ServerApiError } from '../../../lib/server-api';
+import { createCampaign, createEvent, getSettings, ServerApiError } from '../../../lib/server-api';
 
 export async function POST(request: Request) {
   try {
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
       startsAt?: string;
       endsAt?: string;
       timezone?: string;
+      brief?: { about?: string; where?: string; notes?: string };
     };
 
     const event = await createEvent({
@@ -21,9 +23,15 @@ export async function POST(request: Request) {
       startsAt: body.startsAt ?? '',
       endsAt: body.endsAt ?? '',
       timezone: body.timezone ?? 'Asia/Kolkata',
+      brief: {
+        about: body.brief?.about ?? '',
+        where: body.brief?.where ?? '',
+        notes: body.brief?.notes ?? '',
+      },
     });
 
-    for (const template of campaignTemplates()) {
+    const settings = await getSettings();
+    for (const template of campaignTemplates(settings)) {
       await createCampaign(event.id, template);
     }
 

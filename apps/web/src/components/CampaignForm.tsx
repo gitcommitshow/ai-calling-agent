@@ -9,30 +9,41 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
+import { SettingHint } from './SettingHint';
 import { assemblePrompt, PROMPT_PLACEHOLDERS } from '../domain/prompt';
-import type { OrgSettings } from '../domain/settings';
+import { clampGuestAttempts, MAX_GUEST_ATTEMPTS } from '../domain/retry-cap';
+import { sameCallingWindow, type CallingHoursMode, type OrgSettings } from '../domain/settings';
 import type { Campaign, CaptureField, Event, Guest, Language } from '../domain/types';
 
 interface Props {
   event: Event;
   campaign: Campaign;
   settings: OrgSettings;
+  /** Server env. Strict refuses outside-hours dials; soft allows a confirmed override. */
+  callingHoursMode?: CallingHoursMode;
   /** A real queued guest when there is one, so the preview is representative. */
   sampleGuest: Guest | Pick<Guest, 'name' | 'ticketName' | 'approvalStatus' | 'email' | 'phone' | 'attributes'>;
 }
 
 const KINDS: CaptureField['kind'][] = ['text', 'boolean', 'enum'];
 
-export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) {
+export function CampaignForm({
+  event,
+  campaign,
+  settings,
+  callingHoursMode = 'soft',
+  sampleGuest,
+}: Props) {
   const router = useRouter();
   const [name, setName] = useState(campaign.name);
   const [useMasterPrompt, setUseMasterPrompt] = useState(campaign.useMasterPrompt);
+  const [purpose, setPurpose] = useState(campaign.purpose ?? '');
   const [prompt, setPrompt] = useState(campaign.prompt);
   const [language, setLanguage] = useState<Language>(campaign.language);
   const [fields, setFields] = useState<CaptureField[]>(campaign.fields);
   const [windowStart, setWindowStart] = useState(campaign.callingWindow.start);
   const [windowEnd, setWindowEnd] = useState(campaign.callingWindow.end);
-  const [retryCap, setRetryCap] = useState(campaign.retryCap);
+  const [retryCap, setRetryCap] = useState(clampGuestAttempts(campaign.retryCap));
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -41,12 +52,18 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
     () =>
       assemblePrompt({
         event,
-        campaign: { ...campaign, prompt, useMasterPrompt, language, fields },
+        campaign: { ...campaign, prompt, purpose, useMasterPrompt, language, fields },
         guest: sampleGuest,
         settings,
       }),
-    [campaign, event, fields, language, prompt, sampleGuest, settings, useMasterPrompt],
+    [campaign, event, fields, language, prompt, purpose, sampleGuest, settings, useMasterPrompt],
   );
+
+  const usesOrgWindow = sameCallingWindow(
+    { start: windowStart, end: windowEnd, timezone: campaign.callingWindow.timezone },
+    settings.callingWindow,
+  );
+  const usesOrgRetry = retryCap === settings.retryCap;
 
   function updateField(index: number, patch: Partial<CaptureField>) {
     setFields((current) =>
@@ -68,6 +85,7 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
         body: JSON.stringify({
           name,
           prompt,
+          purpose: purpose.trim(),
           useMasterPrompt,
           language,
           fields: fields.map((field) =>
@@ -129,6 +147,23 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
             required
             onChange={(changeEvent) => setWindowStart(changeEvent.target.value)}
           />
+          <SettingHint
+            detail={
+              (usesOrgWindow
+                ? 'Matches the org default in Settings. The runner enforces this campaign window. Changing it here overrides the org default for this queue only. New campaigns still copy the org value.'
+                : `Overrides the org default (${settings.callingWindow.start}-${settings.callingWindow.end} ${settings.callingWindow.timezone}). The runner enforces this campaign window, not the org default. Silence hangup and max call length stay org-wide.`) +
+              (callingHoursMode === 'strict'
+                ? ' STRICT_CALLING_HOURS is set, so a call outside this window is refused. Unset that variable and restart the server to allow an override.'
+                : ' Outside this window, a call continues only after two confirmations.')
+            }
+          >
+            {usesOrgWindow
+              ? 'Matches org default. The runner uses this campaign window.'
+              : `Overrides org default (${settings.callingWindow.start}-${settings.callingWindow.end}). This campaign window wins at dial time.`}
+            {callingHoursMode === 'strict'
+              ? ' Strict calling hours are on.'
+              : ' Outside hours needs two confirmations.'}
+          </SettingHint>
         </div>
         <div>
           <label htmlFor="window-end">Calling window end</label>
@@ -139,18 +174,58 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
             required
             onChange={(changeEvent) => setWindowEnd(changeEvent.target.value)}
           />
+          <button
+            type="button"
+            className="secondary tiny"
+            onClick={() => {
+              setWindowStart(settings.callingWindow.start);
+              setWindowEnd(settings.callingWindow.end);
+            }}
+          >
+            Use org hours
+          </button>
         </div>
         <div>
           <label htmlFor="retry-cap">Attempts allowed per guest</label>
-          <input
-            id="retry-cap"
-            type="number"
-            min={1}
-            max={10}
-            value={retryCap}
-            onChange={(changeEvent) => setRetryCap(Number(changeEvent.target.value))}
-          />
+          <div className="attempt-slider">
+            <input
+              id="retry-cap"
+              type="range"
+              min={1}
+              max={MAX_GUEST_ATTEMPTS}
+              step={1}
+              value={retryCap}
+              onChange={(changeEvent) => setRetryCap(clampGuestAttempts(Number(changeEvent.target.value)))}
+            />
+            <span className="attempt-slider-value">{retryCap}</span>
+          </div>
+          <SettingHint
+            detail={
+              usesOrgRetry
+                ? `Matches the org default. The runner checks this campaign value before each dial. At most ${MAX_GUEST_ATTEMPTS}. A guest can have their own limit. Slide that guest back to this number to follow the campaign again.`
+                : `Overrides the org default of ${settings.retryCap}. This campaign value is the default for guests on this event. At most ${MAX_GUEST_ATTEMPTS}. A guest can have their own limit. Slide that guest back to this number to follow the campaign again.`
+            }
+          >
+            {usesOrgRetry
+              ? 'Campaign default. A guest can have their own limit.'
+              : `Overrides org default (${settings.retryCap}). Guests can still differ.`}
+          </SettingHint>
         </div>
+      </div>
+
+      <div>
+        <label htmlFor="campaign-purpose">Purpose of this call</label>
+        <p className="small muted">
+          One line added after the agent prompt. Leave it empty when the usual prompt is enough.
+        </p>
+        <textarea
+          id="campaign-purpose"
+          value={purpose}
+          maxLength={500}
+          rows={2}
+          placeholder="Ask speakers to arrive 20 minutes early"
+          onChange={(changeEvent) => setPurpose(changeEvent.target.value)}
+        />
       </div>
 
       <div className="stack">
@@ -163,9 +238,9 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
           <span>
             Use the org master prompt for {campaign.type} campaigns
             <br />
-            <span className="small muted">
+            <span className="small muted" title="When on, the wording in Settings is what the call runs. When off, the custom prompt below replaces it for this campaign only. Context field gates in Settings still apply either way.">
               Edit the shared wording in <Link href="/settings">Settings</Link>. Turn this off to
-              write a custom prompt for this event only.
+              write a custom prompt for this event only. Context gates in Settings still apply.
             </span>
           </span>
         </label>
@@ -199,7 +274,8 @@ export function CampaignForm({ event, campaign, settings, sampleGuest }: Props) 
         <h3>Fields to capture</h3>
         {fields.length === 0 ? <p className="empty small">No fields yet.</p> : null}
         {fields.map((field, index) => (
-          <div className="row" key={`${field.key}-${index}`}>
+          // Row identity stays on position so editing the key does not remount the input.
+          <div className="row" key={index}>
             <div>
               <label htmlFor={`field-key-${index}`}>Key</label>
               <input

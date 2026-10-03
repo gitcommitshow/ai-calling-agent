@@ -7,16 +7,28 @@
  * eligible right now and what a call to them did.
  */
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
+import { CampaignQuickCalls } from './CampaignQuickCalls';
+import { GuestCallList } from './GuestCallList';
+import { GuestRetryCap } from './GuestRetryCap';
 import { Icon } from './Icon';
+import {
+  OutsideWindowConfirm,
+  type OutsideWindowStep,
+} from './OutsideWindowConfirm';
 import { APPROVAL_STATUS_ICONS } from './status-icons';
 import { defaultCampaign } from '../domain/default-campaign';
+import type { CallingHoursMode } from '../domain/settings';
 import {
   checkEligibility,
   countAttemptsByGuest,
+  latestAttemptByGuest,
   type Eligibility,
 } from '../domain/eligibility';
+import { latestSkipByGuest } from '../domain/run-skips';
 import { buildQueue, filterGuests, moveInQueue, ticketNamesOf } from '../domain/filter-order';
+import { withGuestRetryCap } from '../domain/retry-cap';
 import { formatIndianPhone } from '../domain/phone';
 import {
   APPROVAL_STATUSES,
@@ -27,10 +39,27 @@ import {
   type ApprovalStatus,
   type Attempt,
   type Campaign,
+  type CampaignType,
   type Event,
   type Guest,
   type Run,
 } from '../domain/types';
+
+/** Sentinel for the queue dropdown's "add a campaign" row. Not a stored id. */
+const ADD_CAMPAIGN = '__add_campaign__';
+
+/** Apply attempt-limit edits the page has not reloaded yet. */
+function campaignWithRetryEdits(
+  current: Campaign,
+  edits: Record<string, number | null> | undefined,
+): Campaign {
+  if (!edits) return current;
+  let retryCapOverrides = current.retryCapOverrides;
+  for (const [guestId, cap] of Object.entries(edits)) {
+    retryCapOverrides = withGuestRetryCap(retryCapOverrides, guestId, cap);
+  }
+  return { ...current, retryCapOverrides };
+}
 
 /**
  * How often a single-guest call is checked, and for how long, before the card
@@ -44,13 +73,30 @@ interface Props {
   guests: Guest[];
   campaigns: Campaign[];
   attempts: Attempt[];
+  runs: Run[];
   nowIso: string;
+  /** Strict refuses outside-hours dials. Soft opens the two-step confirmation. */
+  callingHoursMode?: CallingHoursMode;
 }
 
-export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props) {
+export function GuestQueue({
+  event,
+  guests,
+  campaigns,
+  attempts,
+  runs,
+  nowIso,
+  callingHoursMode = 'soft',
+}: Props) {
   const router = useRouter();
   const initialCampaign = defaultCampaign(campaigns, event, new Date(nowIso));
   const [campaignId, setCampaignId] = useState(initialCampaign?.id ?? '');
+  const [addedCampaigns, setAddedCampaigns] = useState<Campaign[]>([]);
+  const [draftName, setDraftName] = useState('');
+  const [draftPurpose, setDraftPurpose] = useState('');
+  const [draftType, setDraftType] = useState<CampaignType>(
+    new Date(nowIso) < new Date(event.startsAt) ? 'pre-event' : 'post-event',
+  );
   const [statuses, setStatuses] = useState<ApprovalStatus[]>([]);
   const [ticketName, setTicketName] = useState('');
   const [search, setSearch] = useState('');
@@ -62,9 +108,28 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
   const [callResults, setCallResults] = useState<Record<string, string>>({});
   /** Brief highlight on a card after Earlier/Later so the move is visible. */
   const [movedGuestId, setMovedGuestId] = useState<string | null>(null);
+  const [outsideStep, setOutsideStep] = useState<OutsideWindowStep>('idle');
+  const [pendingOutsideGuest, setPendingOutsideGuest] = useState<Guest | null>(null);
+  /** Per campaign, the attempt limit just saved for a guest. Null means follow the campaign default. */
+  const [retryEdits, setRetryEdits] = useState<Record<string, Record<string, number | null>>>({});
 
-  const campaign = campaigns.find((candidate) => candidate.id === campaignId);
-  const now = useMemo(() => new Date(nowIso), [nowIso]);
+  const knownCampaigns = useMemo(() => {
+    const byId = new Map(campaigns.map((item) => [item.id, item]));
+    for (const extra of addedCampaigns) {
+      if (!byId.has(extra.id)) byId.set(extra.id, extra);
+    }
+    return [...byId.values()];
+  }, [addedCampaigns, campaigns]);
+
+  const campaign = knownCampaigns.find((candidate) => candidate.id === campaignId);
+  // The page snapshot goes stale if it stays open past the calling window.
+  const [now, setNow] = useState(() => new Date(nowIso));
+  useEffect(() => {
+    const tick = () => setNow(new Date());
+    tick();
+    const timer = window.setInterval(tick, 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
   const ticketNames = useMemo(() => ticketNamesOf(guests), [guests]);
 
   /**
@@ -88,21 +153,50 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
     });
   }, [guests, statuses, ticketName, search, queue]);
 
+  const attemptsByGuest = useMemo(
+    () => (campaign ? countAttemptsByGuest(attempts, campaign.id) : {}),
+    [attempts, campaign],
+  );
+
+  const callsByGuest = useMemo(() => {
+    const grouped = new Map<string, Attempt[]>();
+    for (const attempt of attempts) {
+      const list = grouped.get(attempt.guestId);
+      if (list) list.push(attempt);
+      else grouped.set(attempt.guestId, [attempt]);
+    }
+    return grouped;
+  }, [attempts]);
+
+  const latestByGuest = useMemo(
+    () => (campaign ? latestAttemptByGuest(attempts, campaign.id) : {}),
+    [attempts, campaign],
+  );
+
+  const campaignForCalls = useMemo(
+    () => (campaign ? campaignWithRetryEdits(campaign, retryEdits[campaign.id]) : undefined),
+    [campaign, retryEdits],
+  );
+
   const eligibility = useMemo(() => {
-    if (!campaign) return new Map<string, Eligibility>();
-    const attemptsByGuest = countAttemptsByGuest(attempts, campaign.id);
-    const withQueue = { ...campaign, queue };
+    if (!campaignForCalls) return new Map<string, Eligibility>();
+    const withQueue = { ...campaignForCalls, queue };
     return new Map(
       guests.map((guest) => [
         guest.id,
         checkEligibility(guest, { event, campaign: withQueue, attemptsByGuest, now }),
       ]),
     );
-  }, [attempts, campaign, event, guests, now, queue]);
+  }, [attemptsByGuest, campaignForCalls, event, guests, now, queue]);
 
   const queuePosition = useMemo(
     () => new Map(queue.map((guestId, index) => [guestId, index + 1])),
     [queue],
+  );
+
+  const skippedOnLatestRun = useMemo(
+    () => (campaign ? latestSkipByGuest(runs, campaign.id) : new Map<string, string>()),
+    [campaign, runs],
   );
 
   function toggleStatus(status: ApprovalStatus) {
@@ -139,19 +233,33 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
 
   /**
    * Call one guest. The server owns the decision and reads the number from
-   * storage, then runs the call as a run of one. This follows that run to the
-   * end so the guest's card shows the outcome instead of just "started".
+   * storage, then runs the call as a run of one. Outside calling hours needs a
+   * double confirmation before the request is sent.
    */
-  async function callNow(guest: Guest) {
+  async function callNow(guest: Guest, waiveCallingWindow = false) {
     if (!campaign) return;
+    const state = eligibility.get(guest.id);
+    const outsideWindow =
+      state?.eligible === false && state.reason.startsWith('outside the calling window');
+    if (outsideWindow && !waiveCallingWindow) {
+      setPendingOutsideGuest(guest);
+      setOutsideStep('ack');
+      return;
+    }
+
     setCallingGuestId(guest.id);
     setCallResults((current) => ({ ...current, [guest.id]: 'Starting the call...' }));
+    setOutsideStep('idle');
+    setPendingOutsideGuest(null);
 
     try {
       const response = await fetch(`/api/campaigns/${campaign.id}/calls`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ guestId: guest.id }),
+        body: JSON.stringify({
+          guestId: guest.id,
+          ...(waiveCallingWindow ? { waiveCallingWindow: true } : {}),
+        }),
       });
       const payload = (await response.json()) as { run?: Run; error?: string };
       if (!response.ok || !payload.run) throw new Error(payload.error ?? 'the call was refused');
@@ -195,6 +303,45 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
     throw new Error('the call is taking longer than expected, check the results page');
   }
 
+  /** Create an extra campaign and switch the queue onto it. */
+  async function createCampaign() {
+    const name = draftName.trim();
+    const purpose = draftPurpose.trim();
+    if (!name) {
+      setError('Give the campaign a name.');
+      return;
+    }
+    if (!purpose) {
+      setError('Say what this call is for.');
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const response = await fetch(`/api/events/${event.id}/campaigns`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, type: draftType, purpose }),
+      });
+      const payload = (await response.json()) as { campaign?: Campaign; error?: string };
+      if (!response.ok || !payload.campaign) {
+        throw new Error(payload.error ?? 'could not add the campaign');
+      }
+      setAddedCampaigns((current) => [...current, payload.campaign!]);
+      setCampaignId(payload.campaign.id);
+      setQueue(payload.campaign.queue);
+      setDraftName('');
+      setDraftPurpose('');
+      setMessage(`Added ${payload.campaign.name}. Its queue is empty until you save one.`);
+      router.refresh();
+    } catch (createError) {
+      setError((createError as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function save() {
     if (!campaign) return;
     setBusy(true);
@@ -218,14 +365,227 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
     }
   }
 
-  if (campaigns.length === 0) {
-    return <p className="empty">This event has no campaigns yet.</p>;
+  if (knownCampaigns.length === 0 && campaignId !== ADD_CAMPAIGN) {
+    return (
+      <p className="empty">
+        This event has no campaigns yet.{' '}
+        <button type="button" onClick={() => setCampaignId(ADD_CAMPAIGN)}>
+          Add a custom campaign
+        </button>
+      </p>
+    );
   }
 
   const queueDirty = campaign ? queue.join(',') !== campaign.queue.join(',') : false;
+  const importedGuests = guests.filter((guest) => guest.origin !== 'manual');
+  const manualGuests = guests.filter((guest) => guest.origin === 'manual');
+  const importedVisible = visible.filter((guest) => guest.origin !== 'manual');
+  const manualVisible = visible.filter((guest) => guest.origin === 'manual');
+
+  /** One guest card. Shared by the imported list and the hand-added list. */
+  function guestCard(guest: Guest) {
+    const position = queuePosition.get(guest.id);
+    const queued = position !== undefined;
+    const state = eligibility.get(guest.id);
+    const savedInQueue = campaign?.queue.includes(guest.id) ?? false;
+    const callResult = callResults[guest.id];
+    const skipReason = skippedOnLatestRun.get(guest.id);
+    const skipAlreadyShown =
+      skipReason !== undefined && state?.eligible === false && skipReason === state.reason;
+    const outsideWindow =
+      state?.eligible === false && state.reason.startsWith('outside the calling window');
+    const callBlockedBy =
+      !state?.eligible && !outsideWindow
+        ? (state?.reason ?? 'pick a campaign')
+        : !savedInQueue
+          ? 'save the queue before calling this guest'
+          : null;
+
+    return (
+      <article
+        key={guest.id}
+        className={['entity-card', queued ? 'selected' : '', movedGuestId === guest.id ? 'just-moved' : '']
+          .filter(Boolean)
+          .join(' ')}
+      >
+        <div className="entity-card-head">
+          <input
+            type="checkbox"
+            aria-label={`Queue ${guest.name}`}
+            checked={queued}
+            onChange={() => toggleGuest(guest.id)}
+          />
+          <div>
+            <h3>{guest.name}</h3>
+            <span className="chip">
+              <Icon name={APPROVAL_STATUS_ICONS[guest.approvalStatus]} />
+              {APPROVAL_STATUS_LABELS[guest.approvalStatus]}
+            </span>
+          </div>
+          {queued ? (
+            <span className="position-badge" title="Queue position">
+              {position}
+            </span>
+          ) : null}
+        </div>
+
+        <div className="meta">
+          <span className="meta-row">
+            <Icon name="phone" />
+            <span className="phone">{formatIndianPhone(guest.phone)}</span>
+          </span>
+          <span className="meta-row">
+            <Icon name="mail" />
+            <span className="truncate">{guest.email ?? 'no email'}</span>
+          </span>
+          <span className="meta-row">
+            <Icon name="ticket" />
+            <span className="truncate">{guest.ticketName ?? 'no ticket type'}</span>
+          </span>
+        </div>
+
+        {!state?.eligible ? (
+          <p className="status-line blocked">
+            <Icon name="ban" />
+            <span>{state?.reason ?? 'pick a campaign'}</span>
+          </p>
+        ) : savedInQueue ? (
+          <p className="status-line ok">
+            <Icon name="checkCircle" />
+            <span>Eligible to call</span>
+          </p>
+        ) : (
+          <p className="status-line">
+            <Icon name="list" />
+            <span>Eligible once the queue is saved</span>
+          </p>
+        )}
+
+        {skipReason && !skipAlreadyShown ? (
+          <p className="status-line blocked">
+            <Icon name="ban" />
+            <span>
+              {state?.eligible ? `Last run skipped: ${skipReason}` : `Not called: ${skipReason}`}
+            </span>
+          </p>
+        ) : null}
+
+        {callResult ? (
+          <p className="status-line">
+            <Icon name="alert" />
+            <span>{callResult}</span>
+          </p>
+        ) : null}
+
+        <GuestCallList
+          eventId={event.id}
+          timezone={event.timezone}
+          attempts={callsByGuest.get(guest.id) ?? []}
+          campaigns={campaigns}
+        />
+
+        {campaignForCalls ? (
+          <GuestRetryCap
+            campaignId={campaignForCalls.id}
+            guestId={guest.id}
+            guestName={guest.name}
+            campaignDefault={campaignForCalls.retryCap}
+            override={campaignForCalls.retryCapOverrides?.[guest.id]}
+            attempts={attemptsByGuest[guest.id] ?? 0}
+            latest={latestByGuest[guest.id] ?? null}
+            onSaved={(retryCap) => {
+              const id = campaignForCalls.id;
+              setRetryEdits((current) => ({
+                ...current,
+                [id]: { ...current[id], [guest.id]: retryCap },
+              }));
+            }}
+          />
+        ) : null}
+
+        <div className="entity-card-foot">
+          <form
+            method="get"
+            action={`/events/${event.id}`}
+            onSubmit={(formEvent) => {
+              formEvent.preventDefault();
+              void callNow(guest);
+            }}
+          >
+            <input type="hidden" name="confirm" value={campaign?.id ?? ''} />
+            <input type="hidden" name="guest" value={guest.id} />
+            <input type="hidden" name="step" value="1" />
+            <button
+              type="submit"
+              className="tiny"
+              disabled={
+                callBlockedBy !== null ||
+                callingGuestId === guest.id ||
+                outsideStep !== 'idle' ||
+                !campaign
+              }
+              title={callBlockedBy ?? `Call ${guest.name} now`}
+            >
+              <Icon name="phone" />
+              {callingGuestId === guest.id ? 'Calling...' : 'Call now'}
+            </button>
+          </form>
+
+          {queued ? (
+            <span className="toolbar">
+              <button
+                type="button"
+                className="secondary tiny"
+                aria-label={`Move ${guest.name} earlier in the queue`}
+                onClick={() => moveGuest(guest.id, -1)}
+              >
+                <Icon name="arrowUp" /> Earlier
+              </button>
+              <button
+                type="button"
+                className="secondary tiny"
+                aria-label={`Move ${guest.name} later in the queue`}
+                onClick={() => moveGuest(guest.id, 1)}
+              >
+                <Icon name="arrowDown" /> Later
+              </button>
+            </span>
+          ) : null}
+        </div>
+      </article>
+    );
+  }
 
   return (
     <div className="stack">
+      {campaign && pendingOutsideGuest ? (
+        <OutsideWindowConfirm
+          window={campaign.callingWindow}
+          step={outsideStep}
+          busy={callingGuestId === pendingOutsideGuest.id}
+          mode={callingHoursMode}
+          confirmLabel="Call anyway"
+          onAck={() => setOutsideStep('final')}
+          onConfirm={() => void callNow(pendingOutsideGuest, true)}
+          onCancel={() => {
+            setOutsideStep('idle');
+            setPendingOutsideGuest(null);
+          }}
+        />
+      ) : null}
+      <CampaignQuickCalls
+        eventId={event.id}
+        campaigns={knownCampaigns}
+        runs={runs}
+        callingHoursMode={callingHoursMode}
+        onQueueCleared={(id) => {
+          if (id !== campaignId) return;
+          setQueue([]);
+          const name = knownCampaigns.find((item) => item.id === id)?.name ?? 'this campaign';
+          setMessage(`Removed the queue for ${name}. The campaign is still here.`);
+          setError(null);
+        }}
+      />
       <div className="grid">
         <div>
           <label htmlFor="campaign">Queue for campaign</label>
@@ -235,17 +595,30 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
             onChange={(changeEvent) => {
               const nextId = changeEvent.target.value;
               setCampaignId(nextId);
-              setQueue(campaigns.find((item) => item.id === nextId)?.queue ?? []);
+              setQueue(
+                nextId === ADD_CAMPAIGN
+                  ? []
+                  : (knownCampaigns.find((item) => item.id === nextId)?.queue ?? []),
+              );
               setMessage(null);
+              setError(null);
             }}
           >
-            {campaigns.map((item) => (
+            {knownCampaigns.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
               </option>
             ))}
+            <option value={ADD_CAMPAIGN}>Add a custom campaign...</option>
           </select>
+          {campaign ? (
+            <p className="small muted">
+              <Link href={`/events/${event.id}/campaigns/${campaign.id}`}>Edit this campaign</Link>
+            </p>
+          ) : null}
         </div>
+        {campaignId === ADD_CAMPAIGN ? null : (
+          <>
         <div>
           <label htmlFor="ticket">Ticket type</label>
           <select
@@ -270,8 +643,70 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
             onChange={(changeEvent) => setSearch(changeEvent.target.value)}
           />
         </div>
+          </>
+        )}
       </div>
 
+      {campaignId === ADD_CAMPAIGN ? (
+        <form
+          className="stack"
+          onSubmit={(formEvent) => {
+            formEvent.preventDefault();
+            void createCampaign();
+          }}
+        >
+          <p className="small muted">
+            A separate queue for this event. It keeps that type's master prompt. The purpose below is the only line added to it. The same timing rules still apply.
+          </p>
+          <div className="grid">
+            <div>
+              <label htmlFor="new-campaign-name">Campaign name</label>
+              <input
+                id="new-campaign-name"
+                value={draftName}
+                required
+                maxLength={200}
+                placeholder="Speakers reminder"
+                onChange={(changeEvent) => setDraftName(changeEvent.target.value)}
+              />
+            </div>
+            <div>
+              <label htmlFor="new-campaign-type">When it can call</label>
+              <select
+                id="new-campaign-type"
+                value={draftType}
+                onChange={(changeEvent) => setDraftType(changeEvent.target.value as CampaignType)}
+              >
+                <option value="pre-event">Before the event starts</option>
+                <option value="post-event">After the event ends</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label htmlFor="new-campaign-purpose">Purpose of this call</label>
+            <textarea
+              id="new-campaign-purpose"
+              value={draftPurpose}
+              required
+              maxLength={500}
+              rows={2}
+              placeholder="Ask speakers to arrive 20 minutes early"
+              onChange={(changeEvent) => setDraftPurpose(changeEvent.target.value)}
+            />
+          </div>
+          <div className="toolbar">
+            <button type="submit" disabled={busy}>
+              <Icon name="check" /> {busy ? 'Adding...' : 'Add campaign'}
+            </button>
+          </div>
+          {error ? (
+            <p className="notice error small">
+              <Icon name="alert" /> {error}
+            </p>
+          ) : null}
+        </form>
+      ) : (
+        <>
       <div>
         <label>
           <Icon name="filter" /> Approval status
@@ -322,132 +757,29 @@ export function GuestQueue({ event, guests, campaigns, attempts, nowIso }: Props
         </p>
       ) : null}
 
-      {guests.length === 0 ? (
-        <p className="empty">No guests yet. Import a Luma CSV above.</p>
-      ) : visible.length === 0 ? (
-        <p className="empty">No guests match this filter.</p>
-      ) : (
-        <div className="card-grid">
-          {visible.map((guest) => {
-            const position = queuePosition.get(guest.id);
-            const queued = position !== undefined;
-            const state = eligibility.get(guest.id);
-            const savedInQueue = campaign?.queue.includes(guest.id) ?? false;
-            const callResult = callResults[guest.id];
-            const callBlockedBy = !state?.eligible
-              ? (state?.reason ?? 'pick a campaign')
-              : !savedInQueue
-                ? 'save the queue before calling this guest'
-                : null;
-
-            return (
-              <article
-                key={guest.id}
-                className={[
-                  'entity-card',
-                  queued ? 'selected' : '',
-                  movedGuestId === guest.id ? 'just-moved' : '',
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-              >
-                <div className="entity-card-head">
-                  <input
-                    type="checkbox"
-                    aria-label={`Queue ${guest.name}`}
-                    checked={queued}
-                    onChange={() => toggleGuest(guest.id)}
-                  />
-                  <div>
-                    <h3>{guest.name}</h3>
-                    <span className="chip">
-                      <Icon name={APPROVAL_STATUS_ICONS[guest.approvalStatus]} />
-                      {APPROVAL_STATUS_LABELS[guest.approvalStatus]}
-                    </span>
-                  </div>
-                  {queued ? (
-                    <span className="position-badge" title="Queue position">
-                      {position}
-                    </span>
-                  ) : null}
-                </div>
-
-                <div className="meta">
-                  <span className="meta-row">
-                    <Icon name="phone" />
-                    <span className="phone">{formatIndianPhone(guest.phone)}</span>
-                  </span>
-                  <span className="meta-row">
-                    <Icon name="mail" />
-                    <span className="truncate">{guest.email ?? 'no email'}</span>
-                  </span>
-                  <span className="meta-row">
-                    <Icon name="ticket" />
-                    <span className="truncate">{guest.ticketName ?? 'no ticket type'}</span>
-                  </span>
-                </div>
-
-                {!state?.eligible ? (
-                  <p className="status-line blocked">
-                    <Icon name="ban" />
-                    <span>{state?.reason ?? 'pick a campaign'}</span>
-                  </p>
-                ) : savedInQueue ? (
-                  <p className="status-line ok">
-                    <Icon name="checkCircle" />
-                    <span>Eligible to call</span>
-                  </p>
-                ) : (
-                  <p className="status-line">
-                    <Icon name="list" />
-                    <span>Eligible once the queue is saved</span>
-                  </p>
-                )}
-
-                {callResult ? (
-                  <p className="status-line">
-                    <Icon name="alert" />
-                    <span>{callResult}</span>
-                  </p>
-                ) : null}
-
-                <div className="entity-card-foot">
-                  <button
-                    type="button"
-                    className="tiny"
-                    disabled={callBlockedBy !== null || callingGuestId === guest.id}
-                    title={callBlockedBy ?? `Call ${guest.name} now`}
-                    onClick={() => callNow(guest)}
-                  >
-                    <Icon name="phone" />
-                    {callingGuestId === guest.id ? 'Calling...' : 'Call now'}
-                  </button>
-
-                  {queued ? (
-                    <span className="toolbar">
-                      <button
-                        type="button"
-                        className="secondary tiny"
-                        aria-label={`Move ${guest.name} earlier in the queue`}
-                        onClick={() => moveGuest(guest.id, -1)}
-                      >
-                        <Icon name="arrowUp" /> Earlier
-                      </button>
-                      <button
-                        type="button"
-                        className="secondary tiny"
-                        aria-label={`Move ${guest.name} later in the queue`}
-                        onClick={() => moveGuest(guest.id, 1)}
-                      >
-                        <Icon name="arrowDown" /> Later
-                      </button>
-                    </span>
-                  ) : null}
-                </div>
-              </article>
-            );
-          })}
-        </div>
+      <div className="guest-groups">
+        <section>
+          <h3>Imported</h3>
+          {importedGuests.length === 0 ? (
+            <p className="empty">No imported guests yet. Import a Luma CSV above.</p>
+          ) : importedVisible.length === 0 ? (
+            <p className="empty">No imported guests match this filter.</p>
+          ) : (
+            <div className="card-grid">{importedVisible.map((guest) => guestCard(guest))}</div>
+          )}
+        </section>
+        <section>
+          <h3>Added by hand</h3>
+          {manualGuests.length === 0 ? (
+            <p className="empty">No guests added by hand yet.</p>
+          ) : manualVisible.length === 0 ? (
+            <p className="empty">No hand-added guests match this filter.</p>
+          ) : (
+            <div className="card-grid">{manualVisible.map((guest) => guestCard(guest))}</div>
+          )}
+        </section>
+      </div>
+        </>
       )}
     </div>
   );

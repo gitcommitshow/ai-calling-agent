@@ -70,6 +70,8 @@ Each link opens the page that holds the value, or the doc for the one step that 
 
 Provider credentials live only in the server environment. They are never sent to the web app and never written into `data/`.
 
+The settings page reads the ElevenLabs agent's End call tool and can turn it on or off. That tool is what lets the agent hang up. The campaign prompt cannot do it alone. The page needs `ELEVENLABS_API_KEY` and `ELEVENLABS_AGENT_ID` for that card. A missing key leaves the card visible and uneditable.
+
 `data/` is gitignored. It holds guest phone numbers and transcripts, so treat a copy of it as guest data, not as a fixture. Call audio is relayed and dropped, never written.
 
 `openrouter/free` routes to whichever free model is available, which is rate limited and varies in quality. It is the right default for development and the live-call test. Point `EXTRACTION_MODEL` at a paid model before running a real campaign.

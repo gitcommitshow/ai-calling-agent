@@ -1,17 +1,23 @@
 /**
- * Start a run over the campaign's saved queue. The server owns every decision
- * about who is dialed; this only forwards the request and its status.
+ * Start a run over the campaign's saved queue, now or at a time the organizer
+ * picked. The server owns every decision about who is dialed.
  */
 import { NextResponse } from 'next/server';
 import { ServerApiError, startRun } from '../../../../../lib/server-api';
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ campaignId: string }> },
 ) {
   const { campaignId } = await params;
+  const payload = (await request.json().catch(() => ({}))) as {
+    startsAt?: unknown;
+    waiveCallingWindow?: unknown;
+  };
+  const startsAt = typeof payload.startsAt === 'string' ? payload.startsAt : undefined;
+  const waiveCallingWindow = payload.waiveCallingWindow === true;
   try {
-    const run = await startRun(campaignId);
+    const run = await startRun(campaignId, { startsAt, waiveCallingWindow });
     return NextResponse.json({ run });
   } catch (error) {
     if (error instanceof ServerApiError) {

@@ -3,6 +3,11 @@
  * leave this process and are never written to data files.
  */
 import { isAbsolute, resolve } from 'node:path';
+import {
+  EXTRACTION_PROVIDER_IDS,
+  type ProviderSelection,
+  type SettingsSeeds,
+} from './storage/settings.ts';
 
 /** Telephony vendor selection. `fake` dials nothing and is for local work only. */
 export interface TelephonyConfig {
@@ -36,6 +41,10 @@ export interface CallLimits {
   maxCallSeconds: number;
   silenceSeconds: number;
   dialTimeoutSeconds: number;
+  /** Seconds a silent guest has before the agent starts the call. */
+  openingWaitSeconds: number;
+  /** Seconds from answer before a guest who never speaks is hung up. */
+  noResponseSeconds: number;
 }
 
 export interface ServerConfig {
@@ -48,6 +57,11 @@ export interface ServerConfig {
   voice: VoiceConfig;
   extraction: ExtractionConfig;
   limits: CallLimits;
+  /**
+   * When true, a dial outside calling hours is refused even after the organizer
+   * confirms the risk. Set with STRICT_CALLING_HOURS.
+   */
+  strictCallingHours: boolean;
 }
 
 function text(value: string | undefined, fallback = ''): string {
@@ -82,6 +96,26 @@ const EXTRACTION_KEY_NAMES: Record<string, string[]> = {
   ollama: ['OLLAMA_API_KEY'],
 };
 
+/**
+ * Key for one extraction provider. The provider's own variable wins, then
+ * EXTRACTION_API_KEY, so a settings change can pick a provider that already
+ * has a key without renaming variables.
+ */
+export function extractionKeyFor(env: NodeJS.ProcessEnv, provider: string): string {
+  return firstKey(env, [...(EXTRACTION_KEY_NAMES[provider] ?? []), 'EXTRACTION_API_KEY']);
+}
+
+/** Whether that provider can be called with the keys this process already has. */
+function extractionKeyPresent(
+  config: ServerConfig,
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  if (provider === 'ollama') return true;
+  if (extractionKeyFor(env, provider)) return true;
+  return provider === config.extraction.provider && Boolean(config.extraction.apiKey);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const rawDataDir = text(env.DATA_DIR, './data');
   const port = positiveInt(env.PORT, 4000);
@@ -108,15 +142,68 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     extraction: {
       provider: extractionProvider,
       model: text(env.EXTRACTION_MODEL, 'openrouter/free'),
-      apiKey: firstKey(env, [
-        'EXTRACTION_API_KEY',
-        ...(EXTRACTION_KEY_NAMES[extractionProvider] ?? []),
-      ]),
+      apiKey: extractionKeyFor(env, extractionProvider),
     },
     limits: {
       maxCallSeconds: positiveInt(env.MAX_CALL_SECONDS, 240),
       silenceSeconds: positiveInt(env.SILENCE_SECONDS, 20),
       dialTimeoutSeconds: positiveInt(env.DIAL_TIMEOUT_SECONDS, 45),
+      openingWaitSeconds: 3,
+      noResponseSeconds: 15,
+    },
+    strictCallingHours: boolean(env.STRICT_CALLING_HOURS, false),
+  };
+}
+
+/**
+ * Seeds for a settings file that has never saved a provider. The environment
+ * wins until the organizer saves a choice on the settings page.
+ */
+export function settingsSeedsFromConfig(config: ServerConfig): SettingsSeeds {
+  return {
+    extraction: {
+      provider: config.extraction.provider,
+      model: config.extraction.model,
+    },
+    voiceProvider: config.voice.provider,
+    telephonyProvider: config.telephony.provider,
+  };
+}
+
+/** Which configured providers already have the credentials a call needs. */
+export interface ProviderAvailability {
+  extraction: Record<string, boolean>;
+  voice: { elevenlabs: boolean; fake: boolean };
+  telephony: { plivo: boolean; fake: boolean };
+}
+
+/**
+ * Key presence for the settings page. Reports booleans only, never the key.
+ * `extraProviders` covers a saved custom slug that is not in the built-in list.
+ */
+export function describeProviderAvailability(
+  config: ServerConfig,
+  extraProviders: readonly string[] = [],
+  env: NodeJS.ProcessEnv = process.env,
+): ProviderAvailability {
+  const extraction: Record<string, boolean> = {};
+  for (const id of [...EXTRACTION_PROVIDER_IDS, ...extraProviders]) {
+    extraction[id] = extractionKeyPresent(config, id, env);
+  }
+  return {
+    extraction,
+    voice: {
+      elevenlabs: Boolean(config.voice.apiKey && config.voice.agentId),
+      fake: true,
+    },
+    telephony: {
+      plivo: Boolean(
+        config.telephony.authId &&
+          config.telephony.authToken &&
+          config.telephony.callerId &&
+          /^https:\/\//.test(config.publicBaseUrl),
+      ),
+      fake: true,
     },
   };
 }
@@ -124,12 +211,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
 /**
  * What is still missing before a real call can be placed. Returned as a list so
  * the server can boot (and the organizer can keep editing campaigns) while
- * telling them exactly which variable to set before starting a run.
+ * telling them exactly which variable to set before starting a run. When a
+ * selection is passed, the check follows the saved settings choice.
  */
-export function missingCallConfig(config: ServerConfig): string[] {
+export function missingCallConfig(
+  config: ServerConfig,
+  selection?: Pick<ProviderSelection, 'telephonyProvider' | 'voiceProvider' | 'extraction'>,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const telephonyProvider = selection?.telephonyProvider ?? config.telephony.provider;
+  const voiceProvider = selection?.voiceProvider ?? config.voice.provider;
+  const extractionProvider = selection?.extraction.provider ?? config.extraction.provider;
   const missing: string[] = [];
 
-  if (config.telephony.provider === 'plivo') {
+  if (telephonyProvider === 'plivo') {
     if (!config.telephony.authId) missing.push('PLIVO_AUTH_ID');
     if (!config.telephony.authToken) missing.push('PLIVO_AUTH_TOKEN');
     if (!config.telephony.callerId) missing.push('PLIVO_CALLER_ID');
@@ -137,12 +232,15 @@ export function missingCallConfig(config: ServerConfig): string[] {
       missing.push('PUBLIC_BASE_URL (must be an https origin Plivo can reach)');
     }
   }
-  if (config.voice.provider === 'elevenlabs') {
+  if (voiceProvider === 'elevenlabs') {
     if (!config.voice.apiKey) missing.push('ELEVENLABS_API_KEY');
     if (!config.voice.agentId) missing.push('ELEVENLABS_AGENT_ID');
   }
-  if (!config.extraction.apiKey) {
-    missing.push(`EXTRACTION_API_KEY (or the ${config.extraction.provider} key)`);
+  if (!extractionKeyPresent(config, extractionProvider, env)) {
+    const named = EXTRACTION_KEY_NAMES[extractionProvider]?.[0];
+    missing.push(
+      named ? `${named} or EXTRACTION_API_KEY` : `EXTRACTION_API_KEY (or the ${extractionProvider} key)`,
+    );
   }
 
   return missing;

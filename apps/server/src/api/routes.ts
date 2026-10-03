@@ -12,11 +12,16 @@ import {
   parseCampaignPatch,
   parseEventInput,
   parseGuestImportInput,
+  parseGuestRetryCap,
+  parseManualGuestInput,
   parseOrgSettingsInput,
+  parseRunStartInput,
   parseTestCallRequestInput,
   type TestCallPromptSourceInput,
 } from './validate.ts';
-import { guestIdFor, newCampaignId, newEventId } from '../storage/ids.ts';
+import { importLumaEvent, refreshLumaEvent } from '../luma/page.ts';
+import { addManualGuest, applyGuestImport, ExistingGuestError } from '../guests/roster.ts';
+import { newCampaignId, newEventId } from '../storage/ids.ts';
 import { CALL_OUTCOMES } from '../storage/types.ts';
 import type {
   AttemptRecord,
@@ -31,8 +36,20 @@ import type {
   TestCallPromptSource,
   TestCallRecord,
 } from '../storage/types.ts';
+import {
+  retryCapOverridesForGuests,
+  sameRetryCapOverrides,
+  withGuestRetryCap,
+} from '../runner/retry-cap.ts';
+import type { ProviderAvailability } from '../config.ts';
 import { GuardrailError, RunConflictError, type CallRunner } from '../runner/runner.ts';
+import { adoptProviderSelection, type ProviderSelection } from '../storage/settings.ts';
 import type { TelephonyPort } from '../telephony/types.ts';
+import {
+  parseAgentHangupInput,
+  type AgentHangupSettings,
+  type VoiceHangupPort,
+} from '../voice/agent-hangup.ts';
 
 /**
  * What the API needs beyond storage to place calls. Left optional so the data
@@ -43,6 +60,14 @@ export interface ApiServices {
   telephony: TelephonyPort;
   /** Variables still unset before a real call can be placed, if any. */
   missingConfig?: () => string[];
+  /** Live provider choice. Updated when settings are saved. */
+  providerSelection?: ProviderSelection;
+  /** Whether each provider already has credentials. Never includes the key. */
+  providerAvailability?: (extractionProvider: string) => ProviderAvailability;
+  /** STRICT_CALLING_HOURS. Omitted means soft, so older callers stay compatible. */
+  callingHoursMode?: 'strict' | 'soft';
+  /** ElevenLabs End call tool. Omitted when the agent credentials are unset. */
+  voiceHangup?: VoiceHangupPort;
 }
 
 interface RouteContext {
@@ -72,6 +97,16 @@ function route(
   return { method, segments: pattern.split('/').filter(Boolean), handle };
 }
 
+/** The homepage sends `{ url }` for a Luma page. */
+function lumaUrlFrom(body: unknown): string {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw badRequest('url is required');
+  }
+  const url = (body as { url?: unknown }).url;
+  if (typeof url !== 'string' || url.trim() === '') throw badRequest('url is required');
+  return url;
+}
+
 async function loadEvent(storage: Storage, eventId: string): Promise<EventRecord> {
   const event = await storage.getEvent(eventId);
   if (!event) throw notFound(`event not found: ${eventId}`);
@@ -99,14 +134,72 @@ function requireCalling(services: ApiServices | undefined): ApiServices {
   return services;
 }
 
+/** Status of the End call tool for the settings page. Never includes the API key. */
+function voiceHangupView(
+  hangup: VoiceHangupPort | undefined,
+  settings: AgentHangupSettings | null,
+  error: string | null,
+) {
+  if (!hangup || !settings) {
+    return {
+      available: false,
+      enabled: false,
+      description: '',
+      agentId: hangup?.agentId ?? null,
+      error:
+        error ??
+        'ElevenLabs needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID before this server can read the agent hangup tool.',
+    };
+  }
+  return {
+    available: true,
+    enabled: settings.enabled,
+    description: settings.description,
+    agentId: hangup.agentId,
+    error: null,
+  };
+}
+
+/** Read the tool for the settings page. A provider failure stays on this card. */
+async function readVoiceHangup(hangup: VoiceHangupPort | undefined) {
+  if (!hangup) return voiceHangupView(undefined, null, null);
+  try {
+    return voiceHangupView(hangup, await hangup.read(), null);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'could not read the agent hangup tool';
+    return voiceHangupView(hangup, null, message);
+  }
+}
+
 /** Turn a runner refusal into the status the organizer's UI expects. */
 async function startRun(
   services: ApiServices,
   campaign: CampaignRecord,
-  options: { kind: 'queue' | 'single'; guestIds?: string[] },
+  options: {
+    kind: 'queue' | 'single';
+    guestIds?: string[];
+    waiveRetryCap?: boolean;
+    waiveCallingWindow?: boolean;
+  },
 ): Promise<RunRecord> {
   try {
     return await services.runner.startRun(campaign, options);
+  } catch (error) {
+    if (error instanceof RunConflictError) throw new HttpError(409, error.message);
+    if (error instanceof GuardrailError) throw new HttpError(400, error.message);
+    throw error;
+  }
+}
+
+/** Save a later start. 409 when another run is already waiting. */
+async function scheduleRun(
+  services: ApiServices,
+  campaign: CampaignRecord,
+  startsAt: Date,
+  options: { waiveCallingWindow?: boolean } = {},
+): Promise<RunRecord> {
+  try {
+    return await services.runner.scheduleRun(campaign, startsAt, options);
   } catch (error) {
     if (error instanceof RunConflictError) throw new HttpError(409, error.message);
     if (error instanceof GuardrailError) throw new HttpError(400, error.message);
@@ -223,14 +316,20 @@ async function resolveTestCall(
   };
 }
 
-/** Drop queue entries whose guest is no longer on the list after an import. */
+/** Drop queue entries and per-guest attempt limits whose guest is no longer on the list. */
 async function pruneQueues(storage: Storage, eventId: string, guestIds: Set<string>): Promise<number> {
   let removed = 0;
   for (const campaign of await storage.listCampaigns(eventId)) {
     const queue = campaign.queue.filter((guestId) => guestIds.has(guestId));
-    if (queue.length === campaign.queue.length) continue;
+    const retryCapOverrides = retryCapOverridesForGuests(campaign.retryCapOverrides, guestIds);
+    const queueChanged = queue.length !== campaign.queue.length;
+    const overridesChanged = !sameRetryCapOverrides(retryCapOverrides, campaign.retryCapOverrides);
+    if (!queueChanged && !overridesChanged) continue;
     removed += campaign.queue.length - queue.length;
-    await storage.putCampaign({ ...campaign, queue, updatedAt: new Date().toISOString() });
+    const next: CampaignRecord = { ...campaign, queue, updatedAt: new Date().toISOString() };
+    if (retryCapOverrides) next.retryCapOverrides = retryCapOverrides;
+    else delete next.retryCapOverrides;
+    await storage.putCampaign(next);
   }
   return removed;
 }
@@ -253,15 +352,54 @@ const routes: Route[] = [
     },
   })),
 
-  route('GET', '/settings', async ({ storage }) => ({
+  route('GET', '/settings', async ({ storage, services }) => {
+    const settings = await storage.getSettings();
+    return {
+      status: 200,
+      body: {
+        settings,
+        callingHoursMode: services?.callingHoursMode === 'strict' ? 'strict' : 'soft',
+        providerAvailability:
+          services?.providerAvailability?.(settings.extraction.provider) ?? null,
+      },
+    };
+  }),
+
+  route('GET', '/settings/voice-hangup', async ({ services }) => ({
     status: 200,
-    body: { settings: await storage.getSettings() },
+    body: { voiceHangup: await readVoiceHangup(services?.voiceHangup) },
   })),
 
-  route('PUT', '/settings', async ({ body, storage }) => {
+  route('PUT', '/settings/voice-hangup', async ({ body, services }) => {
+    const hangup = services?.voiceHangup;
+    if (!hangup) {
+      throw new HttpError(
+        503,
+        'ElevenLabs needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID before this server can change the agent hangup tool.',
+      );
+    }
+    let input: AgentHangupSettings;
+    try {
+      input = parseAgentHangupInput(body);
+    } catch (error) {
+      throw badRequest(error instanceof Error ? error.message : 'invalid hangup settings');
+    }
+    try {
+      const saved = await hangup.update(input);
+      return { status: 200, body: { voiceHangup: voiceHangupView(hangup, saved, null) } };
+    } catch (error) {
+      throw new HttpError(
+        502,
+        error instanceof Error ? error.message : 'could not update the agent hangup tool',
+      );
+    }
+  }),
+
+  route('PUT', '/settings', async ({ body, storage, services }) => {
     const input = parseOrgSettingsInput(body);
     const settings = { ...input, updatedAt: new Date().toISOString() };
     await storage.putSettings(settings);
+    if (services?.providerSelection) adoptProviderSelection(services.providerSelection, settings);
     return { status: 200, body: { settings } };
   }),
 
@@ -298,6 +436,17 @@ const routes: Route[] = [
     body: { events: await storage.listEvents() },
   })),
 
+  route('POST', '/events/from-luma', async ({ body, storage }) => {
+    const url = lumaUrlFrom(body);
+    const result = await importLumaEvent(storage, url);
+    return { status: result.created ? 201 : 200, body: result };
+  }),
+
+  route('POST', '/events/:eventId/refresh-luma', async ({ params, storage }) => {
+    const event = await refreshLumaEvent(storage, params.eventId!);
+    return { status: 200, body: { event } };
+  }),
+
   route('POST', '/events', async ({ body, storage }) => {
     const input = parseEventInput(body);
     const now = new Date().toISOString();
@@ -307,6 +456,8 @@ const routes: Route[] = [
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       timezone: input.timezone,
+      brief: input.brief,
+      sourceUrl: null,
       lastImport: null,
       createdAt: now,
       updatedAt: now,
@@ -329,6 +480,8 @@ const routes: Route[] = [
       startsAt: input.startsAt,
       endsAt: input.endsAt,
       timezone: input.timezone,
+      brief: input.brief,
+      sourceUrl: existing.sourceUrl,
       updatedAt: new Date().toISOString(),
     };
     await storage.putEvent(event);
@@ -340,22 +493,35 @@ const routes: Route[] = [
     return { status: 200, body: { guests: await storage.listGuests(params.eventId!) } };
   }),
 
+  route('POST', '/events/:eventId/guests', async ({ params, body, storage }) => {
+    const event = await loadEvent(storage, params.eventId!);
+    const input = parseManualGuestInput(body);
+    try {
+      const guest = await addManualGuest(storage, event.id, input);
+      return { status: 201, body: { guest } };
+    } catch (error) {
+      if (error instanceof ExistingGuestError) throw new HttpError(409, error.message);
+      throw error;
+    }
+  }),
+
   route('POST', '/events/:eventId/guests/import', async ({ params, body, storage }) => {
     const event = await loadEvent(storage, params.eventId!);
     const input = parseGuestImportInput(body);
+    const existing = await storage.listGuests(event.id);
+    const merged = applyGuestImport(existing, input.guests);
 
-    const byId = new Map<string, GuestRecord>();
-    for (const guest of input.guests) {
-      const id = guestIdFor(guest);
-      byId.set(id, { id, ...guest });
-    }
-    const guests = [...byId.values()];
-    await storage.replaceGuests(event.id, guests);
-    const removedFromQueues = await pruneQueues(storage, event.id, new Set(byId.keys()));
+    await storage.replaceGuests(event.id, merged.guests);
+    const removedFromQueues = await pruneQueues(
+      storage,
+      event.id,
+      new Set(merged.guests.map((guest) => guest.id)),
+    );
 
+    const importedCount = merged.guests.filter((guest) => guest.origin !== 'manual').length;
     const lastImport = {
       at: new Date().toISOString(),
-      importedCount: guests.length,
+      importedCount,
       skippedWithoutPhone: input.skippedWithoutPhone,
     };
     await storage.putEvent({ ...event, lastImport, updatedAt: lastImport.at });
@@ -364,7 +530,8 @@ const routes: Route[] = [
       status: 200,
       body: {
         ...lastImport,
-        duplicateRowsMerged: input.guests.length - guests.length,
+        duplicateRowsMerged: merged.duplicateRowsMerged,
+        skippedExistingPhones: merged.skippedExistingPhones,
         removedFromQueues,
       },
     };
@@ -412,6 +579,27 @@ const routes: Route[] = [
   }),
 
   /**
+   * Set one guest's attempt limit, or clear it so they follow the campaign default again.
+   * The campaign retry cap stays the default for every guest without an override.
+   */
+  route('PUT', '/campaigns/:campaignId/guests/:guestId/retry-cap', async ({ params, body, storage }) => {
+    const existing = await loadCampaign(storage, params.campaignId!);
+    const guest = await storage.getGuest(existing.eventId, params.guestId!);
+    if (!guest) throw notFound(`guest not found on this event: ${params.guestId}`);
+
+    const retryCap = parseGuestRetryCap(body);
+    const retryCapOverrides = withGuestRetryCap(existing.retryCapOverrides, guest.id, retryCap);
+    const campaign: CampaignRecord = {
+      ...existing,
+      updatedAt: new Date().toISOString(),
+    };
+    if (retryCapOverrides) campaign.retryCapOverrides = retryCapOverrides;
+    else delete campaign.retryCapOverrides;
+    await storage.putCampaign(campaign);
+    return { status: 200, body: { campaign } };
+  }),
+
+  /**
    * Call one guest. The number is read from storage by guest id and never taken
    * from the request, so a number that is not on the list can never be dialed.
    * This is a run with a queue of one, so it reports the same way as a full run.
@@ -419,21 +607,61 @@ const routes: Route[] = [
   route('POST', '/campaigns/:campaignId/calls', async ({ params, body, storage, services }) => {
     const calling = requireCalling(services);
     const campaign = await loadCampaign(storage, params.campaignId!);
-    const { guestId } = parseCallRequestInput(body);
+    const { guestId, openQuestionId, waiveCallingWindow } = parseCallRequestInput(body);
 
     const guest = await storage.getGuest(campaign.eventId, guestId);
     if (!guest) throw notFound(`guest not found on this event: ${guestId}`);
 
-    const run = await startRun(calling, campaign, { kind: 'single', guestIds: [guest.id] });
+    if (openQuestionId) await assertOpenQuestion(storage, campaign, guest.id, openQuestionId);
+
+    const run = await startRun(calling, campaign, {
+      kind: 'single',
+      guestIds: [guest.id],
+      waiveRetryCap: openQuestionId !== null,
+      waiveCallingWindow,
+    });
     return { status: 202, body: { run } };
   }),
 
-  /** Start the campaign's saved queue. One run at a time, one call at a time. */
-  route('POST', '/campaigns/:campaignId/runs', async ({ params, storage, services }) => {
+  /**
+   * Mark one saved question resolved. The record stays on the attempt.
+   * Placing the follow-up call does not do this.
+   */
+  route(
+    'POST',
+    '/events/:eventId/attempts/:attemptId/questions/:questionId/resolve',
+    async ({ params, storage }) => {
+      const event = await loadEvent(storage, params.eventId!);
+      const attempt = await storage.getAttempt(event.id, params.attemptId!);
+      if (!attempt) throw notFound(`attempt not found: ${params.attemptId}`);
+
+      const questionId = params.questionId!;
+      if (!attempt.openQuestions.some((question) => question.id === questionId)) {
+        throw notFound(`question not found: ${questionId}`);
+      }
+
+      const updated: AttemptRecord = {
+        ...attempt,
+        openQuestions: attempt.openQuestions.map((question) =>
+          question.id === questionId ? { ...question, status: 'resolved' } : question,
+        ),
+      };
+      await storage.putAttempt(updated);
+      return { status: 200, body: { attempt: updated } };
+    },
+  ),
+
+  /**
+   * Start the campaign's saved queue now, or at `startsAt` if that field is set.
+   * A scheduled run dials nothing until then, and stop cancels it.
+   */
+  route('POST', '/campaigns/:campaignId/runs', async ({ params, body, storage, services }) => {
     const calling = requireCalling(services);
     const campaign = await loadCampaign(storage, params.campaignId!);
-
-    const run = await startRun(calling, campaign, { kind: 'queue' });
+    const { startsAt, waiveCallingWindow } = parseRunStartInput(body);
+    const run = startsAt
+      ? await scheduleRun(calling, campaign, new Date(startsAt), { waiveCallingWindow })
+      : await startRun(calling, campaign, { kind: 'queue', waiveCallingWindow });
     return { status: 202, body: { run } };
   }),
 
@@ -487,6 +715,28 @@ const routes: Route[] = [
     return { status: 200, body: { summary: buildSummary(event, guests, campaigns, attempts) } };
   }),
 ];
+
+/**
+ * A follow-up dial is allowed only for a question that is still open on this
+ * guest and campaign. Anything else is an ordinary call and keeps the retry cap.
+ */
+async function assertOpenQuestion(
+  storage: Storage,
+  campaign: CampaignRecord,
+  guestId: string,
+  questionId: string,
+): Promise<void> {
+  const attempts = await storage.listAttempts(campaign.eventId);
+  const open = attempts.some(
+    (attempt) =>
+      attempt.campaignId === campaign.id &&
+      attempt.guestId === guestId &&
+      attempt.openQuestions.some(
+        (question) => question.id === questionId && question.status === 'open',
+      ),
+  );
+  if (!open) throw badRequest('that question is not open for this guest');
+}
 
 /** A queue may only reference guests stored for that event (never a raw number). */
 async function assertQueueGuestsExist(

@@ -97,6 +97,7 @@ export interface AttemptEvent {
 }
 
 export type RunStatus =
+  | 'scheduled'
   | 'running'
   | 'stopping'
   | 'completed'
@@ -105,6 +106,7 @@ export type RunStatus =
   | 'interrupted';
 
 export const RUN_STATUS_LABELS: Record<RunStatus, string> = {
+  scheduled: 'Scheduled',
   running: 'Running',
   stopping: 'Stopping',
   completed: 'Completed',
@@ -136,16 +138,33 @@ export interface ImportSummary {
   skippedWithoutPhone: number;
 }
 
+/** Facts the agent may say. Empty strings mean the organizer has not written them. */
+export interface EventBrief {
+  /** What the event is, in a sentence or two. */
+  about: string;
+  /** Where it is, or that it is online. */
+  where: string;
+  /** Practical notes the organizer adds later. They outrank the description. */
+  notes: string;
+}
+
 export interface Event {
   id: string;
   name: string;
   startsAt: string;
   endsAt: string;
   timezone: string;
+  /** What the call is allowed to tell the guest, besides the name and times. */
+  brief: EventBrief;
+  /** Canonical Luma page this event was filled from. Null when entered by hand. */
+  sourceUrl: string | null;
   lastImport: ImportSummary | null;
   createdAt: string;
   updatedAt: string;
 }
+
+/** imported from a CSV. manual when the organizer typed the guest in. */
+export type GuestOrigin = 'imported' | 'manual';
 
 export interface Guest {
   id: string;
@@ -158,6 +177,8 @@ export interface Guest {
   checkedInAt: string | null;
   registeredAt: string | null;
   attributes: Record<string, string>;
+  /** Omitted on older lists, which were all imports. */
+  origin?: GuestOrigin;
 }
 
 /** A guest as mapped from an upload, before the server assigns an id. */
@@ -185,10 +206,20 @@ export interface Campaign {
   prompt: string;
   /** When true, the org master prompt for this campaign type wins. */
   useMasterPrompt: boolean;
+  /**
+   * One line added after the agent prompt. Empty on the usual campaigns.
+   * Omitted on older files.
+   */
+  purpose?: string;
   language: Language;
   fields: CaptureField[];
   callingWindow: CallingWindow;
   retryCap: number;
+  /**
+   * Per-guest attempt limits. Guests missing from this map use retryCap,
+   * the default for this campaign. Omitted when every guest follows that default.
+   */
+  retryCapOverrides?: Record<string, number>;
   voiceBackendOrder: VoiceBackend[];
   queue: string[];
   createdAt: string;
@@ -199,6 +230,14 @@ export interface TranscriptTurn {
   role: 'agent' | 'guest';
   text: string;
   at: string;
+}
+
+/** A question the call could not answer, kept so a person can call the guest back. */
+export interface OpenQuestion {
+  id: string;
+  /** The question in the guest's words. */
+  text: string;
+  status: 'open' | 'resolved';
 }
 
 export interface Attempt {
@@ -214,6 +253,8 @@ export interface Attempt {
   endedAt: string | null;
   transcript: TranscriptTurn[];
   capturedFields: Record<string, string>;
+  /** Questions the brief could not answer. */
+  openQuestions: OpenQuestion[];
   voiceBackend: VoiceBackend | null;
   fallbackUsed: boolean;
   providerCallId: string | null;
@@ -234,6 +275,15 @@ export interface Run {
   currentAttemptId: string | null;
   attemptIds: string[];
   skipped: SkippedGuest[];
+  /** When true, this run is a follow-up on an open question and skips the retry cap. */
+  waiveRetryCap: boolean;
+  /**
+   * When true, the organizer double-confirmed dialing outside calling hours.
+   * Event timing rules still apply.
+   */
+  waiveCallingWindow: boolean;
+  /** When dialing should begin. Null when the organizer started the run immediately. */
+  scheduledFor: string | null;
   startedAt: string;
   endedAt: string | null;
   error: string | null;

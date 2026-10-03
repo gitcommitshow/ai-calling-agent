@@ -7,7 +7,7 @@ An outbound AI calling agent for event organizers. Import a guest list, choose w
 ## What works today
 
 - Create an event with its name, start, and end time (entered as IST).
-- Import a Luma guest CSV: known columns mapped, approval statuses preserved, custom question columns kept as guest attributes, guests without a callable Indian number skipped and counted.
+- Import a Luma guest CSV: known columns mapped, approval statuses preserved, custom question columns kept as guest attributes, guests without a phone number skipped and counted. A number with no country code is treated as India when it is a 10-digit mobile. Other country codes are kept and not dialed yet.
 - Filter guests by approval status, ticket type, and free text; select a subset; order the call queue; save it per campaign.
 - Edit a campaign: prompt with placeholders, conversation language, fields to capture, calling window, attempts per guest. The prompt preview is the exact text a call uses.
 - See per-guest eligibility with the reason a guest cannot be called yet.

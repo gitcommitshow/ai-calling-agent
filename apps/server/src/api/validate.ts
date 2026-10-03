@@ -3,10 +3,17 @@
  * app owns product rules, but persistence only ever sees well-formed records.
  */
 import { badRequest } from './http.ts';
+import { MAX_GUEST_ATTEMPTS } from '../runner/retry-cap.ts';
 import {
+  AGENT_PERSONALITY_MAX,
   CONTEXT_FIELD_IDS,
+  EXTRACTION_MODEL_PATTERN,
+  EXTRACTION_PROVIDER_PATTERN,
   isContextFieldId,
+  TELEPHONY_PROVIDER_IDS,
+  VOICE_PROVIDER_IDS,
   type ContextFieldId,
+  type ExtractionChoice,
   type OrgSettings,
 } from '../storage/settings.ts';
 import { APPROVAL_STATUSES } from '../storage/types.ts';
@@ -15,6 +22,7 @@ import type {
   CallingWindow,
   CampaignType,
   CaptureField,
+  EventBrief,
   Language,
   VoiceBackend,
 } from '../storage/types.ts';
@@ -46,6 +54,7 @@ export interface EventInput {
   startsAt: string;
   endsAt: string;
   timezone: string;
+  brief: EventBrief;
 }
 
 export interface CampaignInput {
@@ -53,6 +62,7 @@ export interface CampaignInput {
   name: string;
   prompt: string;
   useMasterPrompt: boolean;
+  purpose: string;
   language: Language;
   fields: CaptureField[];
   callingWindow: CallingWindow;
@@ -65,6 +75,10 @@ export type CampaignPatch = Partial<Omit<CampaignInput, 'type'>>;
 
 export interface CallRequestInput {
   guestId: string;
+  /** Set when this dial answers a saved question. Null for an ordinary call. */
+  openQuestionId: string | null;
+  /** True only after the organizer double-confirmed outside calling hours. */
+  waiveCallingWindow: boolean;
 }
 
 /** Prompt choice on a test-call request before the server resolves defaults. */
@@ -100,6 +114,25 @@ function optionalString(value: unknown, what: string, maxLength = 2000): string 
   if (typeof value !== 'string') throw badRequest(`${what} must be a string`);
   if (value.length > maxLength) throw badRequest(`${what} is too long`);
   return value.trim();
+}
+
+/** A brief line may be empty. A non-string is refused. */
+function briefField(value: unknown, what: string, maxLength: number): string {
+  if (value === undefined || value === null || value === '') return '';
+  if (typeof value !== 'string') throw badRequest(`${what} must be a string`);
+  if (value.length > maxLength) throw badRequest(`${what} is too long`);
+  return value.trim();
+}
+
+/** Facts the agent may say. Omitted means an empty brief. */
+function parseBrief(value: unknown): EventBrief {
+  if (value === undefined || value === null) return { about: '', where: '', notes: '' };
+  const record = asRecord(value, 'brief');
+  return {
+    about: briefField(record.about, 'brief.about', 8000),
+    where: briefField(record.where, 'brief.where', 2000),
+    notes: briefField(record.notes, 'brief.notes', 4000),
+  };
 }
 
 function requireIsoDate(value: unknown, what: string): string {
@@ -164,6 +197,20 @@ export function parseEventInput(body: unknown): EventInput {
     startsAt,
     endsAt,
     timezone: requireTimezone(record.timezone),
+    brief: parseBrief(record.brief),
+  };
+}
+
+/** A guest typed in by the organizer. Any E.164 number is stored. Calling is still India-only. */
+export function parseManualGuestInput(body: unknown): { name: string; phone: string } {
+  const record = asRecord(body, 'guest');
+  const phone = requireString(record.phone, 'phone', 20);
+  if (!E164.test(phone)) {
+    throw badRequest('phone must be a full number with a country code, in E.164 form');
+  }
+  return {
+    name: requireString(record.name, 'name', 200),
+    phone,
   };
 }
 
@@ -239,10 +286,44 @@ function parseCallingWindow(value: unknown): CallingWindow {
 }
 
 function parseRetryCap(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 10) {
-    throw badRequest('retryCap must be an integer between 1 and 10');
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 1 ||
+    value > MAX_GUEST_ATTEMPTS
+  ) {
+    throw badRequest(`retryCap must be an integer between 1 and ${MAX_GUEST_ATTEMPTS}`);
   }
   return value;
+}
+
+/** One guest's attempt limit, or null to follow the campaign default again. */
+export function parseGuestRetryCap(body: unknown): number | null {
+  const record = asRecord(body, 'retry cap');
+  if (!('retryCap' in record)) throw badRequest('retryCap is required');
+  if (record.retryCap === null) return null;
+  return parseRetryCap(record.retryCap);
+}
+
+/** Whole seconds for org call limits, within a named range. */
+function parsePositiveSeconds(value: unknown, what: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    throw badRequest(`${what} must be an integer between ${min} and ${max}`);
+  }
+  return value;
+}
+
+/** The agent must be able to speak before a silent pickup is hung up. */
+function parseOpeningLimits(
+  opening: unknown,
+  noResponse: unknown,
+): { openingWaitSeconds: number; noResponseSeconds: number } {
+  const openingWaitSeconds = parsePositiveSeconds(opening, 'openingWaitSeconds', 1, 30);
+  const noResponseSeconds = parsePositiveSeconds(noResponse, 'noResponseSeconds', 5, 120);
+  if (openingWaitSeconds >= noResponseSeconds) {
+    throw badRequest('openingWaitSeconds must be shorter than noResponseSeconds');
+  }
+  return { openingWaitSeconds, noResponseSeconds };
 }
 
 function parseBackendOrder(value: unknown): VoiceBackend[] {
@@ -262,6 +343,20 @@ function parseQueue(value: unknown): string[] {
   const queue = rows.map((row, index) => requireString(row, `queue[${index}]`, 120));
   if (new Set(queue).size !== queue.length) throw badRequest('queue cannot repeat a guest');
   return queue;
+}
+
+/** Tone and length. Blank is allowed and adds no extra style. */
+function parseAgentPersonality(value: unknown): string {
+  if (value === undefined || value === null) throw badRequest('agentPersonality is required');
+  if (typeof value !== 'string') throw badRequest('agentPersonality must be a string');
+  if (value.length > AGENT_PERSONALITY_MAX) throw badRequest('agentPersonality is too long');
+  return value.trim();
+}
+
+/** Empty when the campaign uses the agent prompt with nothing added. */
+function parsePurpose(value: unknown): string {
+  if (value === undefined || value === null || value === '') return '';
+  return requireString(value, 'purpose', 500);
 }
 
 function parseBoolean(value: unknown, what: string): boolean {
@@ -290,6 +385,7 @@ export function parseCampaignInput(body: unknown): CampaignInput {
     name: requireString(record.name, 'name', 200),
     prompt: requireString(record.prompt, 'prompt', 20000),
     useMasterPrompt: parseBoolean(record.useMasterPrompt ?? true, 'useMasterPrompt'),
+    purpose: parsePurpose(record.purpose),
     language: requireOneOf(record.language, ['en', 'hi'] as const, 'language'),
     fields: parseFields(record.fields ?? []),
     callingWindow: parseCallingWindow(
@@ -310,6 +406,7 @@ export function parseCampaignPatch(body: unknown): CampaignPatch {
   if ('useMasterPrompt' in record) {
     patch.useMasterPrompt = parseBoolean(record.useMasterPrompt, 'useMasterPrompt');
   }
+  if ('purpose' in record) patch.purpose = parsePurpose(record.purpose);
   if ('language' in record) {
     patch.language = requireOneOf(record.language, ['en', 'hi'] as const, 'language');
   }
@@ -340,19 +437,84 @@ export function parseOrgSettingsInput(body: unknown): Omit<OrgSettings, 'updated
   }
 
   return {
+    agentPersonality: parseAgentPersonality(record.agentPersonality),
     masterPrompts: {
       'pre-event': requireString(prompts['pre-event'], 'masterPrompts.pre-event', 20000),
       'post-event': requireString(prompts['post-event'], 'masterPrompts.post-event', 20000),
     },
     contextFields,
     testNumber: parseOptionalIndianMobile(record.testNumber, 'testNumber'),
+    callingWindow: parseCallingWindow(
+      record.callingWindow ?? { start: '10:00', end: '20:00', timezone: 'Asia/Kolkata' },
+    ),
+    retryCap: parseRetryCap(record.retryCap ?? 1),
+    silenceSeconds: parsePositiveSeconds(record.silenceSeconds, 'silenceSeconds', 5, 600),
+    maxCallSeconds: parsePositiveSeconds(record.maxCallSeconds, 'maxCallSeconds', 30, 3600),
+    dialTimeoutSeconds: parsePositiveSeconds(
+      record.dialTimeoutSeconds,
+      'dialTimeoutSeconds',
+      10,
+      180,
+    ),
+    ...parseOpeningLimits(record.openingWaitSeconds, record.noResponseSeconds),
+    extraction: parseExtraction(record.extraction),
+    voiceProvider: requireOneOf(record.voiceProvider, VOICE_PROVIDER_IDS, 'voiceProvider'),
+    telephonyProvider: requireOneOf(
+      record.telephonyProvider,
+      TELEPHONY_PROVIDER_IDS,
+      'telephonyProvider',
+    ),
   };
+}
+
+/** Provider slug plus model id. Keys are not accepted in this body. */
+function parseExtraction(value: unknown): ExtractionChoice {
+  const record = asRecord(value, 'extraction');
+  const provider = requireString(record.provider, 'extraction.provider', 41);
+  const model = requireString(record.model, 'extraction.model', 121);
+  if (!EXTRACTION_PROVIDER_PATTERN.test(provider)) {
+    throw badRequest('extraction.provider must be a provider name such as openrouter or openai');
+  }
+  if (!EXTRACTION_MODEL_PATTERN.test(model)) {
+    throw badRequest('extraction.model must be a model id');
+  }
+  return { provider, model };
+}
+
+/**
+ * A queue run starts now, unless `startsAt` names a later instant. An empty
+ * body is an immediate start. `waiveCallingWindow` is only for a confirmed
+ * override of daily calling hours.
+ */
+export function parseRunStartInput(body: unknown): {
+  startsAt: string | null;
+  waiveCallingWindow: boolean;
+} {
+  if (body === undefined || body === null) {
+    return { startsAt: null, waiveCallingWindow: false };
+  }
+  const record = asRecord(body, 'run');
+  const waiveCallingWindow =
+    record.waiveCallingWindow === undefined
+      ? false
+      : parseBoolean(record.waiveCallingWindow, 'waiveCallingWindow');
+  if (record.startsAt === undefined || record.startsAt === null || record.startsAt === '') {
+    return { startsAt: null, waiveCallingWindow };
+  }
+  return { startsAt: requireIsoDate(record.startsAt, 'startsAt'), waiveCallingWindow };
 }
 
 /** A call request names a guest id only. The number always comes from storage. */
 export function parseCallRequestInput(body: unknown): CallRequestInput {
   const record = asRecord(body, 'call request');
-  return { guestId: requireString(record.guestId, 'guestId', 120) };
+  return {
+    guestId: requireString(record.guestId, 'guestId', 120),
+    openQuestionId: optionalString(record.openQuestionId, 'openQuestionId', 80),
+    waiveCallingWindow:
+      record.waiveCallingWindow === undefined
+        ? false
+        : parseBoolean(record.waiveCallingWindow, 'waiveCallingWindow'),
+  };
 }
 
 /** Parse a pipeline test request. Omitted `to` means the saved test number. */

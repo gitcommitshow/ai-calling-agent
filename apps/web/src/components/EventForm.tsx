@@ -1,19 +1,23 @@
 'use client';
 
 /**
- * Create an event. A CSV carries no event details, so the organizer enters the
- * name and the start and end time, read as Asia/Kolkata wall-clock time.
+ * Create an event without a Luma page. The start defaults to five hours from
+ * now so the date fields are already a usable choice.
  */
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { Icon } from './Icon';
-import { IST, istInputToIso } from '../lib/time';
+import { IST, isoToIstInput, istInputToIso } from '../lib/time';
+
+function hoursFromNow(hours: number): string {
+  return isoToIstInput(new Date(Date.now() + hours * 60 * 60 * 1000).toISOString());
+}
 
 export function EventForm() {
   const router = useRouter();
   const [name, setName] = useState('');
-  const [startsAt, setStartsAt] = useState('');
-  const [endsAt, setEndsAt] = useState('');
+  const [startsAt, setStartsAt] = useState(() => hoursFromNow(5));
+  const [endsAt, setEndsAt] = useState(() => hoursFromNow(7));
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -30,14 +34,15 @@ export function EventForm() {
           startsAt: istInputToIso(startsAt),
           endsAt: istInputToIso(endsAt),
           timezone: IST,
+          brief: { about: '', where: '', notes: '' },
         }),
       });
       const payload = (await response.json()) as { error?: string; event?: { id: string } };
       if (!response.ok || !payload.event) throw new Error(payload.error ?? 'could not create event');
 
       setName('');
-      setStartsAt('');
-      setEndsAt('');
+      setStartsAt(hoursFromNow(5));
+      setEndsAt(hoursFromNow(7));
       router.push(`/events/${payload.event.id}`);
     } catch (submitError) {
       setError((submitError as Error).message);
@@ -48,6 +53,9 @@ export function EventForm() {
 
   return (
     <form className="stack" onSubmit={submit}>
+      <p className="small muted">
+        Name and times only. The start is five hours from now. Add a description on the event page.
+      </p>
       <div className="grid">
         <div>
           <label htmlFor="event-name">Event name</label>
@@ -86,7 +94,7 @@ export function EventForm() {
         </p>
       ) : null}
       <div>
-        <button type="submit" disabled={busy}>
+        <button type="submit" className="secondary" disabled={busy}>
           <Icon name="calendar" /> {busy ? 'Creating...' : 'Create event'}
         </button>
       </div>

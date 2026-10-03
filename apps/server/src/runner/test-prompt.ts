@@ -18,7 +18,7 @@ import { assemblePrompt } from './prompt.ts';
 export const PIPELINE_TEST_PROMPT = `You are placing a pipeline test call. There is no guest and no event.
 
 Introduce yourself as a test of the calling system. Confirm the person can hear you, then ask them to say a short sentence so speech recognition can be checked.
-Keep the call under one minute. If they want to end it, thank them and hang up. Do not invent event details.`;
+Keep the call under one minute. When they ask to end it, or when neither of you has more to add, thank them and end the call. Do not invent event details.`;
 
 /** In-memory stand-in so an event test fills placeholders without a real guest. */
 export function standInGuest(): GuestRecord {

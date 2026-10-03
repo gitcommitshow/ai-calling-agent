@@ -4,7 +4,7 @@
  * are kept as guest attributes so nothing from the export is lost.
  */
 import Papa from 'papaparse';
-import { normalizeIndianPhone } from './phone';
+import { normalizeGuestPhone } from './phone';
 import type { ApprovalStatus, GuestPayload } from './types';
 
 /** Canonical fields we read out of a Luma export. */
@@ -132,19 +132,18 @@ export function mapLumaRows(rows: Record<string, unknown>[]): LumaImportResult {
       known.name ?? [known.firstName, known.lastName].filter(Boolean).join(' ').trim();
     const displayName = name || known.email || 'Unknown guest';
 
-    const { phone, reason } = normalizeIndianPhone(known.phone);
+    const { phone, reason } = normalizeGuestPhone(known.phone);
     if (!phone) {
       skippedWithoutPhone += 1;
       skipped.push({ row: index + 2, name: displayName, reason: reason ?? 'no phone number' });
       return;
     }
 
-    const dedupeKey = known.sourceId ?? known.email?.toLowerCase() ?? phone;
-    if (seen.has(dedupeKey)) {
+    if (seen.has(phone)) {
       duplicateRows += 1;
       return;
     }
-    seen.add(dedupeKey);
+    seen.add(phone);
 
     guests.push({
       sourceId: blankToNull(known.sourceId),

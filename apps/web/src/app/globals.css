@@ -38,6 +38,12 @@
   --danger: #8a4b3c;
   --danger-wash: rgba(138, 75, 60, 0.07);
 
+  /* Queue bars: warm means a person must start it, green means it will call. */
+  --queue-pending: #f6e7d4;
+  --queue-pending-ink: #6b3e24;
+  --queue-armed: #e3f0e4;
+  --queue-armed-ink: #1e5c34;
+
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
@@ -75,6 +81,11 @@
 
     --danger: #d8a99c;
     --danger-wash: rgba(216, 169, 156, 0.1);
+
+    --queue-pending: #3d2e24;
+    --queue-pending-ink: #f3d5be;
+    --queue-armed: #24352a;
+    --queue-armed-ink: #c9e6d0;
 
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow: 0 2px 10px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.3);
@@ -234,6 +245,12 @@ code {
   grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
 }
 
+.guest-groups {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
 .entity-card {
   display: flex;
   flex-direction: column;
@@ -285,6 +302,36 @@ code {
  * The foot separates by becoming its own band, bleeding to the card edges.
  * A background shift, per the spec, rather than a divider line.
  */
+.guest-calls {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.guest-call-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.guest-calls > li {
+  min-width: 0;
+}
+
+.guest-calls .chip {
+  white-space: normal;
+}
+
+.guest-calls .call-transcript {
+  min-width: 0;
+}
+
 .entity-card-foot {
   display: flex;
   flex-wrap: wrap;
@@ -448,11 +495,49 @@ input[type='file'] {
   padding: var(--space-2);
 }
 
+/* Country code stays visible; the input holds the national number. */
+.phone-field {
+  display: flex;
+  align-items: center;
+  background: var(--sunken);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-inset);
+}
+
+.phone-field:focus-within {
+  background: var(--raised);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.phone-field input.country-code {
+  flex: 0 0 4.5rem;
+  width: 4.5rem;
+  padding-right: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.phone-field input {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  background: transparent;
+  box-shadow: none;
+}
+
+.phone-field input:focus {
+  background: transparent;
+  box-shadow: none;
+}
+
 textarea {
   min-height: 11rem;
   font-family: var(--font-mono);
   font-size: 0.875rem;
   line-height: 1.6;
+}
+
+textarea.compact {
+  min-height: 5.5rem;
 }
 
 button {
@@ -491,6 +576,33 @@ button.secondary {
 
 button.secondary .icon {
   color: var(--text-muted);
+}
+
+button.link {
+  background: none;
+  color: var(--text-muted);
+  box-shadow: none;
+  padding: 0;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+button.link:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  color: var(--accent);
+}
+
+.luma-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: flex-end;
+}
+
+.luma-row .grow {
+  flex: 1 1 16rem;
 }
 
 button.tiny {
@@ -640,6 +752,360 @@ th {
   margin-left: auto;
 }
 
+.queue-list li.queue-person {
+  flex-wrap: wrap;
+}
+
+.queue-person .truncate {
+  flex: 1 1 6rem;
+}
+
+.queue-person .retry-cap {
+  margin-left: auto;
+  margin-top: 0;
+}
+
+.queue-person .phone {
+  margin-left: 0;
+}
+
+.queue-transcripts {
+  flex: 1 1 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.call-transcript summary .call-transcript-line {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  max-width: calc(100% - 1.25rem);
+  min-width: 0;
+  vertical-align: bottom;
+}
+
+.call-transcript summary time {
+  flex: 0 0 auto;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+
+.call-transcript summary .last-line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  color: var(--text);
+}
+
+.retry-cap {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.attempt-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.875rem;
+}
+
+.attempt-meter.custom {
+  color: var(--text);
+}
+
+.attempt-meter.full {
+  color: var(--danger);
+}
+
+.attempt-outcome.answered {
+  color: var(--queue-armed-ink);
+}
+
+.attempt-outcome.failed,
+.attempt-outcome.declined {
+  color: var(--danger);
+}
+
+.retry-cap input[type='range'] {
+  width: 5.5rem;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--accent);
+}
+
+.attempt-slider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.attempt-slider input[type='range'] {
+  width: 8rem;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  accent-color: var(--accent);
+}
+
+.attempt-slider-value {
+  font-variant-numeric: tabular-nums;
+  min-width: 1ch;
+}
+
+button.icon-button {
+  background: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--text-subtle);
+}
+
+button.icon-button:hover:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+  color: var(--text);
+}
+
+.retry-cap-error {
+  color: var(--danger);
+  font-size: 0.75rem;
+}
+
+/* One full-width bar per queue, inside the call queue section. */
+.queue-bars {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.queue-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.15rem var(--space-3);
+  border-radius: var(--radius);
+}
+
+.queue-bar.pending {
+  background: var(--queue-pending);
+  color: var(--queue-pending-ink);
+}
+
+.queue-bar.armed,
+.queue-bar.live {
+  background: var(--queue-armed);
+  color: var(--queue-armed-ink);
+}
+
+.queue-bar-name {
+  min-width: 0;
+  flex: 0 1 16rem;
+  color: inherit;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.queue-bar-state {
+  min-width: 0;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.queue-bar-actions form {
+  display: contents;
+}
+
+.queue-bar input[type='datetime-local'] {
+  width: 11.5rem;
+  height: 2rem;
+  padding: 0 var(--space-2);
+  background: var(--raised);
+  color: var(--text);
+}
+
+button.icon-action {
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  justify-content: center;
+  flex: 0 0 auto;
+  background: transparent;
+  color: inherit;
+  box-shadow: none;
+}
+
+button.icon-action:hover:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  opacity: 0.7;
+}
+
+.queue-bar > form,
+.queue-count form {
+  display: contents;
+}
+
+.queue-count {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.queue-bar button.stop-action {
+  height: 2rem;
+  padding: 0 var(--space-3);
+  background: var(--raised);
+  color: var(--text);
+}
+
+.setting-hint {
+  margin: var(--space-1) 0 0;
+  cursor: help;
+}
+
+/* Full-page block when dialing outside calling hours. */
+.outside-window-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-5);
+  background: rgba(28, 25, 23, 0.72);
+}
+
+.outside-window-dialog {
+  width: min(28rem, 100%);
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  background: var(--raised);
+  color: var(--text);
+  box-shadow: var(--shadow-lift);
+}
+
+.outside-window-kicker {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  color: var(--danger);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.outside-window-kicker .icon {
+  color: inherit;
+}
+
+.outside-window-dialog h2 {
+  margin: 0 0 var(--space-3);
+  font-family: var(--font-heading);
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.outside-window-dialog #outside-window-body {
+  margin: 0 0 var(--space-5);
+  color: var(--text);
+  font-size: 1.0625rem;
+  line-height: 1.55;
+}
+
+.outside-window-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+.outside-window-actions a.outside-window-cancel,
+.outside-window-actions a.outside-window-next {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.outside-window-actions a.outside-window-cancel {
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.outside-window-actions a.outside-window-next,
+.outside-window-actions button.outside-window-danger,
+.outside-window-actions button.outside-window-go {
+  background: var(--danger);
+  color: #fafaf9;
+  border: 0;
+  border-radius: var(--radius);
+  padding: var(--space-2) var(--space-4);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.outside-window-actions button.outside-window-go {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* Inline notice that hours are closed; the dialog still blocks the action. */
+.outside-window-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-4);
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: #fafaf9;
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.outside-window-banner.static {
+  margin-bottom: var(--space-3);
+}
+
+.outside-window-banner .icon {
+  color: inherit;
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+
+.queue-bar-error {
+  margin: var(--space-1) 0 0;
+}
+
 .transcript {
   font-family: var(--font-mono);
   font-size: 0.875rem;
@@ -734,6 +1200,23 @@ details[open] > summary {
   .toolbar-split button {
     flex: 1 1 auto;
     justify-content: center;
+  }
+
+  .queue-bar {
+    flex-wrap: wrap;
+    row-gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .queue-bar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .queue-bar input[type='datetime-local'] {
+    flex: 1 1 auto;
+    width: auto;
+    min-width: 0;
   }
 }
 

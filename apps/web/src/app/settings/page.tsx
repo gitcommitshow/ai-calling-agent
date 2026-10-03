@@ -1,17 +1,30 @@
 /**
- * Org settings: master prompts and which guest/event fields may reach the AI
- * calling infrastructure.
+ * Org settings: agent personality, master prompts, dialing defaults, live call limits, the agent
+ * hangup tool, models and providers, and which fields may reach the caller.
  */
 import Link from 'next/link';
 import { SettingsForm } from '../../components/SettingsForm';
 import { Icon } from '../../components/Icon';
-import { getSettings } from '../../lib/server-api';
+import { loadSettings, loadVoiceHangup } from '../../lib/server-api';
+import type { VoiceHangupStatus } from '../../domain/settings';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
   try {
-    const settings = await getSettings();
+    const [settingsResult, voiceHangup] = await Promise.all([
+      loadSettings(),
+      loadVoiceHangup().catch(
+        (error: Error): VoiceHangupStatus => ({
+          available: false,
+          enabled: false,
+          description: '',
+          agentId: null,
+          error: error.message,
+        }),
+      ),
+    ]);
+    const { settings, callingHoursMode, providerAvailability } = settingsResult;
     return (
       <div className="stack">
         <div>
@@ -22,11 +35,19 @@ export default async function SettingsPage() {
           </p>
           <h1>Settings</h1>
           <p className="muted small">
-            Shared across every event, including the fixed number one-click tests dial. Last
-            saved {new Date(settings.updatedAt).toLocaleString('en-IN')}.
+            Shared across every event: how the agent talks, prompts, default calling hours, live
+            call limits, whether the agent can hang up, models and providers, and the fixed test
+            number. Calling hours are{' '}
+            {callingHoursMode === 'strict' ? 'strict' : 'soft'} on this server. Last saved{' '}
+            {new Date(settings.updatedAt).toLocaleString('en-IN')}.
           </p>
         </div>
-        <SettingsForm initial={settings} />
+        <SettingsForm
+          initial={settings}
+          callingHoursMode={callingHoursMode}
+          providerAvailability={providerAvailability}
+          voiceHangup={voiceHangup}
+        />
       </div>
     );
   } catch (error) {

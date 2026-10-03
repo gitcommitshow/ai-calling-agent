@@ -3,21 +3,32 @@
  * campaign's captured fields, so results from different voice backends stay
  * comparable (DESIGN D3).
  */
-import type { CaptureField, Language, TranscriptTurn } from '../storage/types.ts';
+import type { CaptureField, EventBrief, Language, TranscriptTurn } from '../storage/types.ts';
 
 export interface ExtractionRequest {
   fields: CaptureField[];
   transcript: TranscriptTurn[];
   language: Language;
+  /** What the call was allowed to say, so a question the brief answers is not kept. */
+  brief: EventBrief;
+  /** Guest calls ask for unanswered questions. Pipeline tests do not. */
+  captureQuestions: boolean;
+}
+
+/** Captured fields plus the questions the brief could not answer. */
+export interface ExtractionResult {
+  fields: Record<string, string>;
+  openQuestions: string[];
 }
 
 export interface ExtractionPort {
   readonly provider: string;
   /**
    * One value per requested field. Anything missing, unclear, or failing
-   * validation comes back as `unknown` rather than a guess.
+   * validation comes back as `unknown` rather than a guess. Questions are
+   * the guest's words, and only when captureQuestions is set.
    */
-  extract(request: ExtractionRequest): Promise<Record<string, string>>;
+  extract(request: ExtractionRequest): Promise<ExtractionResult>;
 }
 
 export const UNKNOWN = 'unknown';
@@ -55,4 +66,28 @@ export function coerceValue(field: CaptureField, raw: unknown): string {
   }
 
   return text.slice(0, 2000);
+}
+
+const MAX_OPEN_QUESTIONS = 5;
+const MAX_QUESTION_LENGTH = 500;
+
+/**
+ * Keep only clear, distinct questions. Blanks, duplicates, and "unknown"
+ * are dropped so a hesitant model reply cannot become a callback.
+ */
+export function coerceOpenQuestions(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const text = item.trim().replace(/\s+/g, ' ');
+    const lowered = text.toLowerCase();
+    if (!text || lowered === UNKNOWN || lowered === 'null') continue;
+    if (seen.has(lowered)) continue;
+    seen.add(lowered);
+    kept.push(text.slice(0, MAX_QUESTION_LENGTH));
+    if (kept.length >= MAX_OPEN_QUESTIONS) break;
+  }
+  return kept;
 }

@@ -17,7 +17,13 @@ import type { AudioChannel, TelephonyEvent, TelephonyPort } from '../src/telepho
 import type { VoiceBackendPort, VoiceSessionContext } from '../src/voice/types.ts';
 
 const NOW = new Date('2026-10-05T10:30:00.000Z');
-const LIMITS = { maxCallSeconds: 30, silenceSeconds: 30, dialTimeoutSeconds: 30 };
+const LIMITS = {
+  maxCallSeconds: 30,
+  silenceSeconds: 30,
+  dialTimeoutSeconds: 30,
+  openingWaitSeconds: 3,
+  noResponseSeconds: 15,
+};
 const FIXED_NUMBER = '+919800000001';
 const OTHER_NUMBER = '+919800000002';
 
@@ -27,6 +33,8 @@ const startedEvent: EventRecord = {
   startsAt: '2026-09-01T12:30:00.000Z',
   endsAt: '2026-12-01T16:30:00.000Z',
   timezone: 'Asia/Kolkata',
+  brief: { about: '', where: '', notes: '' },
+  sourceUrl: null,
   lastImport: null,
   createdAt: '2026-09-27T10:00:00.000Z',
   updatedAt: '2026-09-27T10:00:00.000Z',
@@ -162,7 +170,7 @@ describe('pipeline test calls', () => {
     store = new JsonStore(dataDir);
     telephony = new FakeCarrier();
     voice = new FakeVoice((attemptId) => telephony.endCall(attemptId));
-    extract = sinon.stub().resolves({ will_attend: 'yes' });
+    extract = sinon.stub().resolves({ fields: { will_attend: 'yes' }, openQuestions: [] });
     runner = new CallRunner({
       storage: store,
       telephony,

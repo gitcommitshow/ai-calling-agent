@@ -32,6 +32,11 @@ export function newAttemptId(startedAt: string): string {
   return timestampedId(startedAt);
 }
 
+/** Short id for one unanswered question stored on an attempt. */
+export function newQuestionId(): string {
+  return `q-${randomUUID().slice(0, 8)}`;
+}
+
 export function newRunId(startedAt: string): string {
   return `run-${timestampedId(startedAt)}`;
 }

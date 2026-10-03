@@ -14,13 +14,23 @@ import {
 import type {
   AttemptRecord,
   CampaignRecord,
+  EventBrief,
   EventRecord,
   GuestRecord,
+  OpenQuestion,
   RunRecord,
   Storage,
   TestCallRecord,
 } from './types.ts';
-import { defaultOrgSettings, type OrgSettings } from './settings.ts';
+import {
+  defaultOrgSettings,
+  normalizeAgentPersonality,
+  normalizeExtraction,
+  normalizeTelephonyProvider,
+  normalizeVoiceProvider,
+  type OrgSettings,
+  type SettingsSeeds,
+} from './settings.ts';
 
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -36,7 +46,10 @@ export class JsonStore implements Storage {
   private readonly settingsPath: string;
   private readonly testCallsDir: string;
 
-  constructor(private readonly dataDir: string) {
+  constructor(
+    private readonly dataDir: string,
+    private readonly seeds: SettingsSeeds = {},
+  ) {
     this.eventsDir = join(dataDir, 'events');
     this.settingsPath = join(dataDir, 'settings.json');
     this.testCallsDir = join(dataDir, 'test-calls');
@@ -44,17 +57,41 @@ export class JsonStore implements Storage {
 
   /** Org settings sit next to events/, one file for the whole deployment. */
   async getSettings(): Promise<OrgSettings> {
-    const stored = await readJson<OrgSettings>(this.settingsPath);
-    if (!stored) return defaultOrgSettings();
+    const stored = await readJson<Partial<OrgSettings>>(this.settingsPath);
+    const defaults = defaultOrgSettings(stored?.updatedAt);
+    const seeded = applySettingsSeeds(defaults, this.seeds);
+    if (!stored) return seeded;
     return {
-      ...defaultOrgSettings(stored.updatedAt),
+      ...seeded,
       ...stored,
+      agentPersonality: normalizeAgentPersonality(
+        stored.agentPersonality,
+        seeded.agentPersonality,
+      ),
       masterPrompts: {
-        ...defaultOrgSettings().masterPrompts,
-        ...stored.masterPrompts,
+        ...seeded.masterPrompts,
+        ...(stored.masterPrompts ?? {}),
       },
-      contextFields: stored.contextFields ?? defaultOrgSettings().contextFields,
+      contextFields: stored.contextFields ?? seeded.contextFields,
       testNumber: typeof stored.testNumber === 'string' ? stored.testNumber : null,
+      callingWindow: normalizeCallingWindow(stored.callingWindow, seeded.callingWindow),
+      retryCap: clampRetryCap(stored.retryCap, seeded.retryCap),
+      silenceSeconds: positiveLimit(stored.silenceSeconds, seeded.silenceSeconds, 5, 600),
+      maxCallSeconds: positiveLimit(stored.maxCallSeconds, seeded.maxCallSeconds, 30, 3600),
+      dialTimeoutSeconds: positiveLimit(
+        stored.dialTimeoutSeconds,
+        seeded.dialTimeoutSeconds,
+        10,
+        180,
+      ),
+      ...normalizeOpeningLimits(stored, seeded),
+      extraction: normalizeExtraction(stored.extraction, seeded.extraction),
+      voiceProvider: normalizeVoiceProvider(stored.voiceProvider, seeded.voiceProvider),
+      telephonyProvider: normalizeTelephonyProvider(
+        stored.telephonyProvider,
+        seeded.telephonyProvider,
+      ),
+      updatedAt: stored.updatedAt ?? seeded.updatedAt,
     };
   }
 
@@ -78,7 +115,8 @@ export class JsonStore implements Storage {
   }
 
   async getEvent(eventId: string): Promise<EventRecord | null> {
-    return readJson<EventRecord>(join(this.eventDir(eventId), 'event.json'));
+    const event = await readJson<EventRecord>(join(this.eventDir(eventId), 'event.json'));
+    return event ? normalizeEvent(event) : null;
   }
 
   async putEvent(event: EventRecord): Promise<void> {
@@ -86,12 +124,14 @@ export class JsonStore implements Storage {
   }
 
   async listGuests(eventId: string): Promise<GuestRecord[]> {
-    return readJsonDir<GuestRecord>(join(this.eventDir(eventId), 'guests'));
+    const guests = await readJsonDir<GuestRecord>(join(this.eventDir(eventId), 'guests'));
+    return guests.map(normalizeGuest);
   }
 
   async getGuest(eventId: string, guestId: string): Promise<GuestRecord | null> {
     assertSafeId('guest', guestId);
-    return readJson<GuestRecord>(join(this.eventDir(eventId), 'guests', `${guestId}.json`));
+    const guest = await readJson<GuestRecord>(join(this.eventDir(eventId), 'guests', `${guestId}.json`));
+    return guest ? normalizeGuest(guest) : null;
   }
 
   /** Import semantics: the uploaded list becomes the whole guest list for the event. */
@@ -167,12 +207,13 @@ export class JsonStore implements Storage {
 
   async listRuns(eventId: string): Promise<RunRecord[]> {
     const runs = await readJsonDir<RunRecord>(join(this.eventDir(eventId), 'runs'));
-    return runs.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+    return runs.map(normalizeRun).sort((a, b) => b.startedAt.localeCompare(a.startedAt));
   }
 
   async getRun(eventId: string, runId: string): Promise<RunRecord | null> {
     assertSafeId('run', runId);
-    return readJson<RunRecord>(join(this.eventDir(eventId), 'runs', `${runId}.json`));
+    const run = await readJson<RunRecord>(join(this.eventDir(eventId), 'runs', `${runId}.json`));
+    return run ? normalizeRun(run) : null;
   }
 
   /** Run ids are unique across events, so a lookup can scan event folders. */
@@ -228,10 +269,138 @@ export class JsonStore implements Storage {
  * event-level prompts keep working until the organizer opts into the master.
  */
 function normalizeCampaign(campaign: CampaignRecord): CampaignRecord {
-  return {
+  const normalized: CampaignRecord = {
     ...campaign,
     useMasterPrompt: campaign.useMasterPrompt === true,
+    purpose: typeof campaign.purpose === 'string' ? campaign.purpose : '',
+    retryCap: clampRetryCap(campaign.retryCap, 1),
   };
+  const retryCapOverrides = normalizeRetryCapOverrides(campaign.retryCapOverrides);
+  if (retryCapOverrides) normalized.retryCapOverrides = retryCapOverrides;
+  else delete normalized.retryCapOverrides;
+  return normalized;
+}
+
+/**
+ * Attempt ceiling. Keep in step with MAX_GUEST_ATTEMPTS in runner/retry-cap.ts.
+ * Values above it clamp down so an older file cannot allow more than five.
+ */
+function clampRetryCap(value: number | undefined, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) return fallback;
+  return Math.min(5, Math.max(1, value));
+}
+
+/** Drop caps that are not a whole number of at least 1, and clamp the rest to the ceiling. */
+function normalizeRetryCapOverrides(
+  value: CampaignRecord['retryCapOverrides'],
+): Record<string, number> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const overrides: Record<string, number> = {};
+  for (const [guestId, cap] of Object.entries(value)) {
+    if (!SAFE_ID.test(guestId) || guestId.includes('..')) continue;
+    if (typeof cap !== 'number' || !Number.isInteger(cap) || cap < 1) continue;
+    overrides[guestId] = Math.min(5, cap);
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+/** Older guest files have no origin. Those guests came from an import. */
+function normalizeGuest(guest: GuestRecord): GuestRecord {
+  return { ...guest, origin: guest.origin === 'manual' ? 'manual' : 'imported' };
+}
+
+/** Older event files have no brief and no Luma link. Both stay empty. */
+function normalizeEvent(event: EventRecord): EventRecord {
+  const sourceUrl = typeof event.sourceUrl === 'string' ? event.sourceUrl.trim() : '';
+  return {
+    ...event,
+    brief: normalizeBrief(event.brief),
+    sourceUrl: sourceUrl || null,
+  };
+}
+
+/** Keep only string fields, so a partial or missing brief cannot crash prompt assembly. */
+function normalizeBrief(brief: EventBrief | undefined): EventBrief {
+  return {
+    about: typeof brief?.about === 'string' ? brief.about : '',
+    where: typeof brief?.where === 'string' ? brief.where : '',
+    notes: typeof brief?.notes === 'string' ? brief.notes : '',
+  };
+}
+
+/** Older runs are immediate dials, so they still honor the retry cap and have no start time. */
+function normalizeRun(run: RunRecord): RunRecord {
+  const scheduledFor = typeof run.scheduledFor === 'string' && run.scheduledFor ? run.scheduledFor : null;
+  return {
+    ...run,
+    waiveRetryCap: run.waiveRetryCap === true,
+    waiveCallingWindow: run.waiveCallingWindow === true,
+    scheduledFor,
+  };
+}
+
+/** Environment seeds fill only the fields a settings file has never saved. */
+function applySettingsSeeds(settings: OrgSettings, seeds: SettingsSeeds): OrgSettings {
+  return {
+    ...settings,
+    extraction: normalizeExtraction(seeds.extraction, settings.extraction),
+    voiceProvider: normalizeVoiceProvider(seeds.voiceProvider, settings.voiceProvider),
+    telephonyProvider: normalizeTelephonyProvider(
+      seeds.telephonyProvider,
+      settings.telephonyProvider,
+    ),
+  };
+}
+
+/** Fill a missing or partial calling window from the org default. */
+function normalizeCallingWindow(
+  value: OrgSettings['callingWindow'] | undefined,
+  fallback: OrgSettings['callingWindow'],
+): OrgSettings['callingWindow'] {
+  if (!value || typeof value !== 'object') return fallback;
+  const start = typeof value.start === 'string' ? value.start : fallback.start;
+  const end = typeof value.end === 'string' ? value.end : fallback.end;
+  const timezone = typeof value.timezone === 'string' ? value.timezone : fallback.timezone;
+  return { start, end, timezone };
+}
+
+/** Keep a stored limit inside its allowed range, or fall back. */
+function positiveLimit(
+  value: number | undefined,
+  fallback: number,
+  min: number,
+  max: number,
+): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) {
+    return fallback;
+  }
+  return value;
+}
+
+/**
+ * Opening wait and the no-response hangup. A missing or invalid value uses the
+ * seed. The wait stays shorter than the hangup so the agent can still speak.
+ */
+function normalizeOpeningLimits(
+  stored: { openingWaitSeconds?: number; noResponseSeconds?: number },
+  seeded: { openingWaitSeconds: number; noResponseSeconds: number },
+): { openingWaitSeconds: number; noResponseSeconds: number } {
+  const noResponseSeconds = positiveLimit(
+    stored.noResponseSeconds,
+    seeded.noResponseSeconds,
+    5,
+    120,
+  );
+  let openingWaitSeconds = positiveLimit(
+    stored.openingWaitSeconds,
+    seeded.openingWaitSeconds,
+    1,
+    30,
+  );
+  if (openingWaitSeconds >= noResponseSeconds) {
+    openingWaitSeconds = Math.max(1, noResponseSeconds - 1);
+  }
+  return { openingWaitSeconds, noResponseSeconds };
 }
 
 /**
@@ -246,12 +415,32 @@ function normalizeAttempt(attempt: AttemptRecord): AttemptRecord {
     runId: attempt.runId ?? null,
     transcript: Array.isArray(attempt.transcript) ? attempt.transcript : [],
     capturedFields: attempt.capturedFields ?? {},
+    openQuestions: normalizeOpenQuestions(attempt.openQuestions),
     fallbackUsed: attempt.fallbackUsed === true,
     providerCallId: attempt.providerCallId ?? null,
     voiceSessionId: attempt.voiceSessionId ?? null,
     timeline: Array.isArray(attempt.timeline) ? attempt.timeline : [],
     error: attempt.error ?? null,
   };
+}
+
+/** Drop anything that is not a stored question, so a bad file cannot surface a blank. */
+function normalizeOpenQuestions(value: unknown): OpenQuestion[] {
+  if (!Array.isArray(value)) return [];
+  const questions: OpenQuestion[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const record = item as Partial<OpenQuestion>;
+    if (typeof record.id !== 'string' || typeof record.text !== 'string') continue;
+    const text = record.text.trim();
+    if (!text) continue;
+    questions.push({
+      id: record.id,
+      text,
+      status: record.status === 'resolved' ? 'resolved' : 'open',
+    });
+  }
+  return questions;
 }
 
 async function listDirNames(dirPath: string): Promise<string[]> {
