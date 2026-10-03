@@ -45,6 +45,11 @@ import type { ProviderAvailability } from '../config.ts';
 import { GuardrailError, RunConflictError, type CallRunner } from '../runner/runner.ts';
 import { adoptProviderSelection, type ProviderSelection } from '../storage/settings.ts';
 import type { TelephonyPort } from '../telephony/types.ts';
+import {
+  parseAgentHangupInput,
+  type AgentHangupSettings,
+  type VoiceHangupPort,
+} from '../voice/agent-hangup.ts';
 
 /**
  * What the API needs beyond storage to place calls. Left optional so the data
@@ -61,6 +66,8 @@ export interface ApiServices {
   providerAvailability?: (extractionProvider: string) => ProviderAvailability;
   /** STRICT_CALLING_HOURS. Omitted means soft, so older callers stay compatible. */
   callingHoursMode?: 'strict' | 'soft';
+  /** ElevenLabs End call tool. Omitted when the agent credentials are unset. */
+  voiceHangup?: VoiceHangupPort;
 }
 
 interface RouteContext {
@@ -125,6 +132,43 @@ function requireCalling(services: ApiServices | undefined): ApiServices {
     throw new HttpError(503, `calling is not configured yet, missing: ${missing.join(', ')}`);
   }
   return services;
+}
+
+/** Status of the End call tool for the settings page. Never includes the API key. */
+function voiceHangupView(
+  hangup: VoiceHangupPort | undefined,
+  settings: AgentHangupSettings | null,
+  error: string | null,
+) {
+  if (!hangup || !settings) {
+    return {
+      available: false,
+      enabled: false,
+      description: '',
+      agentId: hangup?.agentId ?? null,
+      error:
+        error ??
+        'ElevenLabs needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID before this server can read the agent hangup tool.',
+    };
+  }
+  return {
+    available: true,
+    enabled: settings.enabled,
+    description: settings.description,
+    agentId: hangup.agentId,
+    error: null,
+  };
+}
+
+/** Read the tool for the settings page. A provider failure stays on this card. */
+async function readVoiceHangup(hangup: VoiceHangupPort | undefined) {
+  if (!hangup) return voiceHangupView(undefined, null, null);
+  try {
+    return voiceHangupView(hangup, await hangup.read(), null);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'could not read the agent hangup tool';
+    return voiceHangupView(hangup, null, message);
+  }
 }
 
 /** Turn a runner refusal into the status the organizer's UI expects. */
@@ -319,6 +363,36 @@ const routes: Route[] = [
           services?.providerAvailability?.(settings.extraction.provider) ?? null,
       },
     };
+  }),
+
+  route('GET', '/settings/voice-hangup', async ({ services }) => ({
+    status: 200,
+    body: { voiceHangup: await readVoiceHangup(services?.voiceHangup) },
+  })),
+
+  route('PUT', '/settings/voice-hangup', async ({ body, services }) => {
+    const hangup = services?.voiceHangup;
+    if (!hangup) {
+      throw new HttpError(
+        503,
+        'ElevenLabs needs ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID before this server can change the agent hangup tool.',
+      );
+    }
+    let input: AgentHangupSettings;
+    try {
+      input = parseAgentHangupInput(body);
+    } catch (error) {
+      throw badRequest(error instanceof Error ? error.message : 'invalid hangup settings');
+    }
+    try {
+      const saved = await hangup.update(input);
+      return { status: 200, body: { voiceHangup: voiceHangupView(hangup, saved, null) } };
+    } catch (error) {
+      throw new HttpError(
+        502,
+        error instanceof Error ? error.message : 'could not update the agent hangup tool',
+      );
+    }
   }),
 
   route('PUT', '/settings', async ({ body, storage, services }) => {

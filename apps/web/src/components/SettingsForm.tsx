@@ -6,6 +6,7 @@
  */
 import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
+import { AgentHangupSettings } from './AgentHangupSettings';
 import { Icon } from './Icon';
 import { SettingHint } from './SettingHint';
 import {
@@ -19,6 +20,7 @@ import {
   type OrgSettings,
   type ProviderAvailability,
   type TelephonyProviderId,
+  type VoiceHangupStatus,
   type VoiceProviderId,
 } from '../domain/settings';
 import type { CampaignType } from '../domain/types';
@@ -31,6 +33,8 @@ interface Props {
   callingHoursMode: CallingHoursMode;
   /** Which providers already have a key. Null when the server did not report it. */
   providerAvailability: ProviderAvailability | null;
+  /** End call tool on the ElevenLabs agent. Saved apart from the rest of this form. */
+  voiceHangup: VoiceHangupStatus;
 }
 
 /** Suggested model for a provider, used when the current model is still a default. */
@@ -38,7 +42,12 @@ function suggestedModel(provider: string): string | null {
   return EXTRACTION_PROVIDERS.find((option) => option.id === provider)?.suggestedModel ?? null;
 }
 
-export function SettingsForm({ initial, callingHoursMode, providerAvailability }: Props) {
+export function SettingsForm({
+  initial,
+  callingHoursMode,
+  providerAvailability,
+  voiceHangup,
+}: Props) {
   const router = useRouter();
   const [preEvent, setPreEvent] = useState(initial.masterPrompts['pre-event']);
   const [postEvent, setPostEvent] = useState(initial.masterPrompts['post-event']);
@@ -299,7 +308,7 @@ export function SettingsForm({ initial, callingHoursMode, providerAvailability }
       <section className="card stack">
         <div>
           <h2>Live call limits</h2>
-          <SettingHint detail="These apply to every guest call and pipeline test. Campaigns cannot override them. Changing a value affects the next dial, not a call already on the line.">
+          <SettingHint detail="These apply to every guest call and pipeline test. Campaigns cannot override them. Changing a value affects the next dial, not a call already on the line. When the agent hangup tool is off, or the agent never uses it, these limits are what drops the line.">
             Enforced on every live call. Campaign settings cannot override these.
           </SettingHint>
         </div>
@@ -342,6 +351,8 @@ export function SettingsForm({ initial, callingHoursMode, providerAvailability }
           </div>
         </div>
       </section>
+
+      <AgentHangupSettings initial={voiceHangup} />
 
       <section className="card stack">
         <div>

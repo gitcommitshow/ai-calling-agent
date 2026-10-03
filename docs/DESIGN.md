@@ -161,6 +161,8 @@ The assembled prompt already says to thank the guest and hang up when they are b
 
 The voice backend reports one end-call signal. The runner lets the goodbye audio finish, then hangs up. ElevenLabs delivers that signal as `agent_tool_response` for the built-in `end_call` system tool (on by default for a dashboard agent; add it under `built_in_tools` for an agent created by API). A per-call prompt override leaves that tool in place. The tool's own instructions cover a completed task, a mutual close, and the guest asking to stop, in whatever language the call is in. The assembled prompt keeps its one-line reminder so every campaign and pipeline test inherits it. Matching phrases in the transcript was rejected, because the same request shows up in many wordings. A provider socket that closes because the agent ended the call is a normal completion. A cascaded backend later gives its LLM the same tool and reports the same signal.
 
+Settings reads that tool from the configured ElevenLabs agent and can turn it on or off, and can replace its instructions. A blank instruction is saved as the default: hang up after saying goodbye. The change is stored on the agent, so later calls on that agent id use it, including ones whose prompt only says to hang up. A call already connected keeps the tool it started with. Only that card writes the agent.
+
 An agent hangup after the guest spoke is stored as `answered`, with the close on the attempt timeline. `SILENCE_SECONDS` and `MAX_CALL_SECONDS` stay as the backstop when the model never signals.
 
 **D15. An unanswered question is a saved callback, not a guess (2026-09-29).**

@@ -12,6 +12,7 @@ import {
   settingsSeedsFromConfig,
 } from './config.ts';
 import { buildCallServices } from './services.ts';
+import { ElevenLabsAgentHangup } from './voice/agent-hangup.ts';
 import { JsonStore } from './storage/json-store.ts';
 import { adoptProviderSelection } from './storage/settings.ts';
 
@@ -28,6 +29,10 @@ const services = {
     describeProviderAvailability(config, [extractionProvider]),
   missingConfig: () => missingCallConfig(config, selection),
   callingHoursMode: config.strictCallingHours ? ('strict' as const) : ('soft' as const),
+  voiceHangup:
+    config.voice.apiKey && config.voice.agentId
+      ? new ElevenLabsAgentHangup(config.voice)
+      : undefined,
 };
 
 const server = createServer(createRequestListener(storage, services));

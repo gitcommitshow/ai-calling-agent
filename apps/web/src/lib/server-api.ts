@@ -13,7 +13,12 @@ import type {
   TestCall,
 } from '../domain/types';
 import type { CampaignTemplate } from '../domain/campaign-templates';
-import type { CallingHoursMode, OrgSettings, ProviderAvailability } from '../domain/settings';
+import type {
+  CallingHoursMode,
+  OrgSettings,
+  ProviderAvailability,
+  VoiceHangupStatus,
+} from '../domain/settings';
 
 const SERVER_URL = process.env.SERVER_URL?.replace(/\/$/, '') ?? 'http://127.0.0.1:4000';
 
@@ -275,6 +280,27 @@ export async function getSummary(eventId: string): Promise<EventSummary> {
   return (await request<{ summary: EventSummary }>(`/events/${eventId}/summary`)).summary;
 }
 
+/** A missing hangup payload still renders the card, with a reason it cannot be changed. */
+function asVoiceHangup(value: unknown): VoiceHangupStatus {
+  if (!value || typeof value !== 'object') {
+    return {
+      available: false,
+      enabled: false,
+      description: '',
+      agentId: null,
+      error: 'This server did not report the agent hangup tool.',
+    };
+  }
+  const record = value as Partial<VoiceHangupStatus>;
+  return {
+    available: record.available === true,
+    enabled: record.enabled === true,
+    description: typeof record.description === 'string' ? record.description : '',
+    agentId: typeof record.agentId === 'string' && record.agentId ? record.agentId : null,
+    error: typeof record.error === 'string' ? record.error : null,
+  };
+}
+
 /** Org settings, calling-hours mode, and which providers already have keys. */
 export async function loadSettings(): Promise<{
   settings: OrgSettings;
@@ -291,6 +317,24 @@ export async function loadSettings(): Promise<{
     callingHoursMode: body.callingHoursMode === 'strict' ? 'strict' : 'soft',
     providerAvailability: body.providerAvailability ?? null,
   };
+}
+
+/** End call tool on the ElevenLabs agent. A provider failure stays on the card. */
+export async function loadVoiceHangup(): Promise<VoiceHangupStatus> {
+  const body = await request<{ voiceHangup?: unknown }>('/settings/voice-hangup');
+  return asVoiceHangup(body.voiceHangup);
+}
+
+/** Turn the ElevenLabs End call tool on or off, and replace its instructions. */
+export async function updateVoiceHangup(input: {
+  enabled: boolean;
+  description: string;
+}): Promise<VoiceHangupStatus> {
+  const body = await request<{ voiceHangup?: unknown }>('/settings/voice-hangup', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+  return asVoiceHangup(body.voiceHangup);
 }
 
 export async function getSettings(): Promise<OrgSettings> {

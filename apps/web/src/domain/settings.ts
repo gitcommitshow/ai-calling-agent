@@ -71,6 +71,23 @@ export interface ProviderAvailability {
   telephony: Record<TelephonyProviderId, boolean>;
 }
 
+/** Custom hangup instructions. Matches the server limit. */
+export const HANGUP_DESCRIPTION_MAX = 4000;
+/** Used when the instruction field is blank. Matches the server constant. */
+export const DEFAULT_HANGUP_DESCRIPTION = 'Hang up after you say goodbye.';
+
+/**
+ * The ElevenLabs agent's End call tool, as last read. `available` is false when
+ * this server cannot read the agent. The API key is never included.
+ */
+export interface VoiceHangupStatus {
+  available: boolean;
+  enabled: boolean;
+  description: string;
+  agentId: string | null;
+  error: string | null;
+}
+
 export interface OrgSettings {
   masterPrompts: Record<CampaignType, string>;
   contextFields: ContextFieldId[];

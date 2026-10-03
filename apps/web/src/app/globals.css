@@ -506,6 +506,10 @@ textarea {
   line-height: 1.6;
 }
 
+textarea.compact {
+  min-height: 5.5rem;
+}
+
 button {
   font: inherit;
   font-weight: 400;

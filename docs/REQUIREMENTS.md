@@ -93,6 +93,7 @@ Guest lists already live on event platforms (or as CSV exports from them). Calli
 - ✓ End the call when the guest asks to stop, after a short goodbye.
 - ✓ End the call when the conversation is finished and neither side has more to add, after a short goodbye.
 - ✓ Keep silence and the maximum call length as safety limits for a call that never reaches either close.
+- ✓ The organizer can see whether the agent is allowed to hang up, turn that on or off, and set the instructions for when it should. A spoken goodbye hangs up only when that tool is on and the agent uses it.
 - ✓ Record call outcome: answered, no answer, voicemail, declined, hung up, or failed.
 - ✓ Do not leave voicemail messages in phase 1.
 - ✓ Extract the configured structured fields from the conversation. Use unknown when an answer is unclear.
