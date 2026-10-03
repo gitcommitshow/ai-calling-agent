@@ -8,7 +8,7 @@ import type { TranscriptTurn } from './types';
 export function lastGuestLine(transcript: TranscriptTurn[]): string | null {
   for (let index = transcript.length - 1; index >= 0; index -= 1) {
     const turn = transcript[index];
-    if (turn.role !== 'guest') continue;
+    if (!turn || turn.role !== 'guest') continue;
     const text = turn.text.trim();
     if (text) return text;
   }
